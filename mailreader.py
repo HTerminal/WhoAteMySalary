@@ -432,9 +432,24 @@ def _process_uid(M, raw_uid, acc, cfg, use_cache=True, on_fetch=None):
     return out
 
 
+def _is_oauth(acc):
+    return (acc.get("auth") or "app_password").lower() in ("oauth", "google", "google_oauth")
+
+
+def _imap_login(M, acc):
+    """Authenticate an open IMAP connection using the mailbox's chosen method:
+    Google OAuth2 (XOAUTH2) or a Gmail app password."""
+    if _is_oauth(acc):
+        import oauth                      # lazy: only needed for OAuth mailboxes
+        token = oauth.access_token(acc["email"])
+        M.authenticate("XOAUTH2", lambda _=None: oauth.xoauth2_bytes(acc["email"], token))
+    else:
+        M.login(acc["email"], acc["app_password"])
+
+
 def _connect(acc):
     M = imaplib.IMAP4_SSL(IMAP_HOST, timeout=25)   # never hang forever on connect
-    M.login(acc["email"], acc["app_password"])
+    _imap_login(M, acc)
     M.select(acc.get("folder", "INBOX"), readonly=True)
     return M
 
@@ -558,8 +573,8 @@ def scan_range(acc, cfg, start_date, end_date, on_total=None, on_step=None,
 
 def test_connection(acc):
     try:
-        M = imaplib.IMAP4_SSL(IMAP_HOST)
-        M.login(acc["email"], acc["app_password"])
+        M = imaplib.IMAP4_SSL(IMAP_HOST, timeout=25)
+        _imap_login(M, acc)
         M.select("INBOX", readonly=True)
         M.logout()
         return True, "OK"

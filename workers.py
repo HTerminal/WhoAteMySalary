@@ -211,6 +211,24 @@ class ScanWorker(QThread):
                           f"{st['skipped']} skipped) — added {st['added']} transactions.")
 
 
+class OAuthWorker(QThread):
+    """Runs the interactive Google sign-in (opens the browser, waits for the
+    loopback redirect) off the UI thread so the window stays responsive."""
+    done = pyqtSignal(dict)              # {ok, message, email}
+
+    def __init__(self, email, client_id, client_secret=""):
+        super().__init__()
+        self.email, self.cid, self.csec = email, client_id, client_secret
+
+    def run(self):
+        try:
+            import oauth
+            ok, msg = oauth.authorize(self.email, self.cid, self.csec)
+        except Exception as e:
+            ok, msg = False, f"{type(e).__name__}: {e}"
+        self.done.emit({"ok": ok, "message": msg, "email": self.email})
+
+
 class _Cancelled(Exception):
     pass
 

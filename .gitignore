@@ -1,5 +1,7 @@
 # ---- personal data & credentials (NEVER commit these) ----
 config.json
+tokens.json
+tokens.json.tmp
 data.db
 data.db-wal
 data.db-shm

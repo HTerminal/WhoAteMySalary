@@ -29,10 +29,11 @@ import theme as T
 import engine
 import charts
 from charts import DonutChart, MonthBars, HBars, KPICard, NumItem
-from workers import PollerWorker, ScanWorker
+from workers import PollerWorker, ScanWorker, OAuthWorker
 import config
 import mailreader
 import notify
+import oauth
 from categorize import EXPENSE_CATEGORIES, INCOME_CATEGORIES
 
 NAV = [
@@ -1144,30 +1145,147 @@ class SettingsPage(Page):
     def _accounts(self, cfg):
         c = card(); v = QVBoxLayout(c); v.setContentsMargins(16, 14, 16, 14)
         v.addWidget(lbl("Mailboxes", bold=True, size=12))
+        v.addWidget(lbl("Gmail accounts to watch. Sign in with Google (recommended — no "
+                        "password stored) or use a 16-character app password.",
+                        color=T.MUTED, size=9))
         for a in cfg.get("accounts", []):
+            em = a.get("email", "")
+            is_o = (a.get("auth") or "app_password").lower() in ("oauth", "google", "google_oauth")
+            connected = is_o and oauth.has_token(em)
             r = QHBoxLayout()
             r.addWidget(lbl(a.get("label", "?"), bold=True, size=10))
-            r.addWidget(lbl(a.get("email", ""), color=T.MUTED, size=9)); r.addStretch(1)
+            r.addWidget(lbl(em, color=T.MUTED, size=9))
+            if is_o:
+                method = "Google · " + ("connected" if connected else "not signed in")
+            else:
+                method = "App password"
+            r.addWidget(lbl(method, color=(T.GREEN if connected else T.MUTED), size=8))
+            r.addStretch(1)
+            if is_o:
+                r.addWidget(btn("Re-authorize" if connected else "Sign in",
+                                lambda _=0, e=em: self._oauth_signin(e), "ghost"))
             r.addWidget(btn("Test", lambda _=0, ac=a: self._test(ac), "ghost"))
             r.addWidget(btn("Remove", lambda _=0, l=a["label"]: self._acc_remove(l), "ghost"))
             v.addLayout(r)
-        v.addSpacing(8)
-        self.a_label = QLineEdit(); self.a_email = QLineEdit(); self.a_pw = QLineEdit()
-        for t, w in [("Label", self.a_label), ("Gmail address", self.a_email), ("App password", self.a_pw)]:
-            v.addLayout(_form_row(t, w))
+        v.addSpacing(10)
+
+        v.addWidget(lbl("Add a mailbox", bold=True, size=10))
+        self.a_label = QLineEdit(); self.a_label.setPlaceholderText("e.g. Personal")
+        self.a_email = QLineEdit(); self.a_email.setPlaceholderText("you@gmail.com")
+        self.a_method = QComboBox()
+        self.a_method.addItems(["Sign in with Google (OAuth2)", "App password"])
+        v.addLayout(_form_row("Label", self.a_label))
+        v.addLayout(_form_row("Gmail address", self.a_email))
+        v.addLayout(_form_row("Sign-in method", self.a_method))
+        # app-password row — shown only when the app-password method is chosen
+        self.a_pw = QLineEdit(); self.a_pw.setEchoMode(QLineEdit.Password)
+        self.a_pw.setPlaceholderText("16-char app password (no spaces)")
+        self.a_pw_row = QWidget(); pwl = QHBoxLayout(self.a_pw_row)
+        pwl.setContentsMargins(0, 0, 0, 0)
+        _pl = lbl("App password", color=T.MUTED, size=9); _pl.setFixedWidth(120)
+        pwl.addWidget(_pl); pwl.addWidget(self.a_pw, 1)
+        v.addWidget(self.a_pw_row)
+        self.a_method.currentIndexChanged.connect(self._toggle_pw)
+        self._toggle_pw()
         v.addSpacing(4)
         v.addWidget(btn("Add mailbox", self._acc_add), alignment=Qt.AlignLeft)
+        v.addWidget(lbl("Google: a browser opens once for you to grant read-only access. "
+                        "App password: Google Account → Security → 2-Step Verification → App passwords.",
+                        color=T.MUTED, size=8))
         self.v.addWidget(c)
+        self._oauth_client_card(cfg)
+
+    def _toggle_pw(self):
+        self.a_pw_row.setVisible(self.a_method.currentText().startswith("App"))
 
     def _acc_add(self):
         lb = self.a_label.text().strip(); em = self.a_email.text().strip()
-        pw = self.a_pw.text().strip().replace(" ", "")
-        if not (lb and em and pw):
-            QMessageBox.information(self.win, "Missing", "Label, email and app password are all required.")
+        use_google = not self.a_method.currentText().startswith("App")
+        if not (lb and em):
+            QMessageBox.information(self.win, "Missing", "Label and Gmail address are required.")
             return
         cfg = config.load()
-        cfg.setdefault("accounts", []).append({"label": lb, "email": em, "app_password": pw, "folder": "INBOX"})
-        config.save(cfg); self.on_show()
+        if any(a.get("label") == lb for a in cfg.get("accounts", [])):
+            QMessageBox.information(self.win, "Duplicate", f"A mailbox labelled '{lb}' already exists.")
+            return
+        if use_google:
+            cfg.setdefault("accounts", []).append(
+                {"label": lb, "email": em, "auth": "oauth", "folder": "INBOX"})
+            config.save(cfg); self.on_show()
+            self._oauth_signin(em)               # launch the browser sign-in now
+        else:
+            pw = self.a_pw.text().strip().replace(" ", "")
+            if not pw:
+                QMessageBox.information(self.win, "Missing",
+                                        "Enter the app password, or choose 'Sign in with Google'.")
+                return
+            cfg.setdefault("accounts", []).append(
+                {"label": lb, "email": em, "auth": "app_password", "app_password": pw, "folder": "INBOX"})
+            config.save(cfg); self.on_show()
+
+    def _oauth_signin(self, email):
+        cfg = config.load()
+        acc = next((a for a in cfg.get("accounts", []) if a.get("email") == email), None)
+        cid, csec, source = oauth.client_creds(account=acc, cfg=cfg)
+        if not cid:
+            QMessageBox.information(
+                self.win, "Google client needed",
+                "Signing in with Google needs an OAuth 'Desktop app' Client ID.\n\n"
+                "Add yours under 'Google sign-in setup' below (free, ~3 minutes — "
+                "see the README), or use an app password instead.")
+            return
+        self.win.toast("Opening browser…", f"Grant read access to {email} in the browser.", "info")
+        self.win._log_line(f"Google sign-in for {email} — client from {source}. Waiting for browser…")
+        self._oauth_worker = OAuthWorker(email, cid, csec)
+        self._oauth_worker.done.connect(self._oauth_done)
+        self._oauth_worker.start()
+
+    def _oauth_done(self, r):
+        if r.get("ok"):
+            self.win.toast("Signed in", f"{r['email']} connected via Google.", "in")
+            self.win._log_line(f"Google sign-in OK for {r['email']}.")
+            self.win.check_now()
+        else:
+            self.win.toast("Google sign-in failed", str(r.get("message", ""))[:140], "out",
+                           on_click=self.win.show_logs)
+            self.win._log_line(f"Google sign-in failed for {r.get('email')}: {r.get('message')}")
+        self.on_show()
+
+    def _oauth_client_card(self, cfg):
+        cid, csec, source = oauth.client_creds(cfg=cfg)
+        c = card(); v = QVBoxLayout(c); v.setContentsMargins(16, 14, 16, 14)
+        v.addWidget(lbl("Google sign-in setup (advanced)", bold=True, size=12))
+        if source == "bundled default":
+            v.addWidget(lbl("A Google client ships with this app — just use 'Sign in with "
+                            "Google' above. Override it here only to use your own.",
+                            color=T.MUTED, size=9))
+        elif source in ("Settings", "this mailbox"):
+            v.addWidget(lbl(f"Using the Google client configured in {source}.",
+                            color=T.MUTED, size=9))
+        else:
+            v.addWidget(lbl("No Google client yet. Create a free OAuth 'Desktop app' client "
+                            "(README → 'Sign in with Google') and paste it here to enable "
+                            "Google sign-in. Or just use an app password above.",
+                            color=T.MUTED, size=9))
+        o = cfg.get("oauth", {}) or {}
+        self.o_cid = QLineEdit(o.get("google_client_id", ""))
+        self.o_cid.setPlaceholderText("xxxxx.apps.googleusercontent.com")
+        self.o_csec = QLineEdit(o.get("google_client_secret", ""))
+        self.o_csec.setEchoMode(QLineEdit.Password)
+        self.o_csec.setPlaceholderText("client secret (from the Desktop app client)")
+        v.addLayout(_form_row("Client ID", self.o_cid))
+        v.addLayout(_form_row("Client secret", self.o_csec))
+        v.addWidget(btn("Save Google client", self._save_oauth_client), alignment=Qt.AlignLeft)
+        self.v.addWidget(c)
+
+    def _save_oauth_client(self):
+        cfg = config.load()
+        cfg.setdefault("oauth", {})
+        cfg["oauth"]["google_client_id"] = self.o_cid.text().strip()
+        cfg["oauth"]["google_client_secret"] = self.o_csec.text().strip()
+        config.save(cfg)
+        self.win.toast("Saved", "Google client saved. Use 'Sign in with Google' on a mailbox.", "in")
+        self.on_show()
 
     def _acc_remove(self, label_):
         if QMessageBox.question(self.win, "Remove", f"Remove mailbox '{label_}'?") != QMessageBox.Yes:
