@@ -1,0 +1,35 @@
+# Fast sanity gate: byte-compile every top-level module on Linux + Windows.
+#
+# This is deliberately lightweight - it catches syntax errors and obvious import
+# typos on both a POSIX and a Windows runner without installing the full GUI
+# stack. It is NOT a full test suite.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  compile:
+    name: py_compile (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile all top-level modules
+        # py_compile fails loudly on any syntax error. Globbing *.py keeps this
+        # fast and dependency-free (no PyQt5 install needed just to parse).
+        shell: bash
+        run: python -m py_compile *.py
