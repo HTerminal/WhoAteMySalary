@@ -25,5 +25,17 @@ Leave both blank to require each user to paste their own client in Settings.
 """
 import os
 
+# Google (Gmail) — a "Desktop app" client has both an id and a secret.
 GOOGLE_CLIENT_ID = os.environ.get("MMT_GOOGLE_CLIENT_ID", "").strip()
 GOOGLE_CLIENT_SECRET = os.environ.get("MMT_GOOGLE_CLIENT_SECRET", "").strip()
+
+# Microsoft (Outlook/Office365) — a public/native client needs only an id
+# (PKCE, no secret). Leave the secret blank unless you registered a confidential
+# client. These names are read by oauth.client_creds() as the bundled default.
+MMT_MICROSOFT_CLIENT_ID = os.environ.get("MMT_MICROSOFT_CLIENT_ID", "").strip()
+MMT_MICROSOFT_CLIENT_SECRET = os.environ.get("MMT_MICROSOFT_CLIENT_SECRET", "").strip()
+
+# Back-compat aliases so oauth.client_creds() finds the Google default under the
+# same MMT_* attribute-name convention it uses for Microsoft.
+MMT_GOOGLE_CLIENT_ID = GOOGLE_CLIENT_ID
+MMT_GOOGLE_CLIENT_SECRET = GOOGLE_CLIENT_SECRET

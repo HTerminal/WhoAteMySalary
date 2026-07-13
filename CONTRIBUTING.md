@@ -80,18 +80,23 @@ On Windows you can also use the bundled launchers:
 The app has six pages: **Overview**, **Review**, **Transactions**, **Scan
 mailbox**, **Parser**, and **Settings**.
 
-### Signing in to Gmail
+### Signing in
 
-There are two supported sign-in methods; you only need one:
+There are three supported sign-in methods; you only need one:
 
 1. **Sign in with Google (OAuth2)** — browser-based, no password stored. Tokens
-   land in the git-ignored `tokens.json`. Using this needs a free Google Cloud
-   OAuth **Desktop app** client (see the README's setup section). Note that
-   Gmail's `https://mail.google.com/` scope is a *restricted* scope: an
-   unverified client only works for accounts you add as **Test users** (up to
-   100), which is plenty for personal/family use.
-2. **App password** — a 16-character Gmail app password (Google Account →
-   Security → 2-Step Verification → App passwords).
+   land in the git-ignored `tokens.json`. Needs a free Google Cloud OAuth
+   **Desktop app** client (see the README). Gmail's `https://mail.google.com/`
+   is a *restricted* scope: an unverified client only works for accounts you add
+   as **Test users** (up to 100), which is plenty for personal/family use.
+2. **Sign in with Microsoft / Outlook (OAuth2)** — same browser flow for
+   Outlook/Hotmail/Office365 (`outlook.office365.com`, scope
+   `IMAP.AccessAsUser.All`). Needs a free Azure **public client** — register an
+   app with redirect `http://localhost` under "Mobile and desktop applications"
+   (client ID only, no secret). See the README.
+3. **App password** — a 16-character **Gmail** app password (Google Account →
+   Security → 2-Step Verification → App passwords). Microsoft has disabled app
+   passwords for most accounts, so use OAuth for Outlook.
 
 For manual testing, the **Parser** page lets you paste an email and see exactly
 what the engine extracts — no live mailbox required.
@@ -109,8 +114,8 @@ wires the rest together.
 | `engine.py` | The data layer — pure DB/analysis operations with **no Qt**. Builds the dashboard model, filters transactions, tags & "learns" merchant→category, manages custom categories, and the one-time credit-card-bill reclassification. |
 | `workers.py` | Background `QThread` workers: `PollerWorker` (auto-checks mailboxes on an interval, auto-retries, never dies), `ScanWorker` (scans a date range), and `OAuthWorker` (runs the interactive Google sign-in off the UI thread). They only touch DB/IMAP and report back via Qt signals. |
 | `mailreader.py` | The IMAP + parsing core. Logs in (XOAUTH2 or app password), fetches mail, and turns a message into a transaction: amount, direction (IN/OUT), merchant, card, bank. Home of `MERCHANT_PATTERNS`, the IN/OUT keyword lists, and the source-matching rules. |
-| `oauth.py` | Pure-stdlib Google "installed app" OAuth2 flow (loopback redirect + PKCE, scope `https://mail.google.com/`, XOAUTH2 for IMAP). Stores/refreshes tokens in `tokens.json`. |
-| `oauth_defaults.py` | Optional place for a maintainer to ship a default Google OAuth client. Left blank by default; usually populated at build time from `MMT_GOOGLE_CLIENT_ID` / `MMT_GOOGLE_CLIENT_SECRET`. |
+| `oauth.py` | Pure-stdlib **Google and Microsoft** "installed app" OAuth2 flow (loopback redirect + PKCE, XOAUTH2 for IMAP). Provider table in `PROVIDERS` (endpoints, scope, IMAP host). Stores/refreshes tokens in `tokens.json`. |
+| `oauth_defaults.py` | Optional place for a maintainer to ship default Google/Microsoft OAuth clients. Left blank by default; usually populated at build time from `MMT_GOOGLE_CLIENT_ID` / `MMT_GOOGLE_CLIENT_SECRET` / `MMT_MICROSOFT_CLIENT_ID`. |
 | `db.py` | SQLite storage (`data.db`) for detected transactions, per-account UID cursor, scanned-UID bookkeeping, and merchant memory. WAL + autocommit for safe concurrency. |
 | `cache.py` | A separate hidden email cache (`cache.db`) storing fetched sender/subject/body so later scans read from disk instead of re-downloading from Gmail. Purely a speed layer; never shown in the UI. |
 | `categorize.py` | The category list (`EXPENSE_CATEGORIES`, `INCOME_CATEGORIES`) and `guess_category()` — the keyword rules that auto-guess a category from merchant + subject. Also the credit-card-bill detection. |

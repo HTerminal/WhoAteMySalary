@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
-"""Google OAuth 2.0 sign-in for Gmail IMAP (XOAUTH2) — pure standard library.
+"""OAuth 2.0 sign-in for IMAP (XOAUTH2) — pure standard library.
 
-Implements Google's "installed application" flow with a loopback redirect and
-PKCE, so a user can grant access from their browser without ever creating or
-pasting an app password. Access is via the IMAP scope `https://mail.google.com/`.
+Supports two providers:
+  * "google"    — Gmail          (imap.gmail.com)
+  * "microsoft" — Outlook/Office (outlook.office365.com)
 
-Nothing here is Qt- or app-specific; it only needs `config` for the OAuth client
+Both use the same "installed application" flow: a loopback redirect + PKCE, so a
+user grants access from their browser and never enters a password into the app.
+Google uses a Desktop-app client (with secret); Microsoft uses a public/native
+client (PKCE only, no secret needed). The resulting access token is used for IMAP
+via the XOAUTH2 SASL mechanism.
+
+Nothing here is Qt- or app-specific; it only needs `config` for the client
 credentials. Tokens (refresh + short-lived access) are stored in `tokens.json`
 next to this file, which is git-ignored — they never leave the machine.
 
 No third-party packages required.
 """
-import base64, hashlib, http.server, json, os, secrets, socket, threading, time
+import base64, hashlib, http.server, json, os, secrets, threading, time
 import urllib.parse, urllib.request, webbrowser
 
 import config
@@ -23,19 +29,63 @@ except Exception:                       # pragma: no cover - defaults are option
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOKENS_PATH = os.path.join(HERE, "tokens.json")
 
-AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
-TOKEN_URI = "https://oauth2.googleapis.com/token"
-SCOPE = "https://mail.google.com/"      # full IMAP access (required for IMAP)
+# Per-provider endpoints, IMAP host and scope. "common" tenant lets Microsoft
+# accept both personal (outlook.com/hotmail) and work/school accounts.
+PROVIDERS = {
+    "google": {
+        "label": "Google",
+        "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "scope": "https://mail.google.com/",
+        "imap_host": "imap.gmail.com",
+        "extra_auth": {"access_type": "offline", "prompt": "consent"},
+        "needs_secret": True,           # Google "Desktop app" client has a secret
+        "send_scope_on_token": False,
+    },
+    "microsoft": {
+        "label": "Microsoft",
+        "auth_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+        "token_uri": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        # offline_access -> refresh token; IMAP.AccessAsUser.All -> IMAP via XOAUTH2
+        "scope": "https://outlook.office.com/IMAP.AccessAsUser.All offline_access",
+        "imap_host": "outlook.office365.com",
+        "extra_auth": {"prompt": "select_account"},
+        "needs_secret": False,          # public/native client — PKCE, no secret
+        "send_scope_on_token": True,
+    },
+}
+DEFAULT_PROVIDER = "google"
 
 _lock = threading.RLock()
 
 
-# --------------------------------------------------------------------------- creds
-def client_creds(account=None, cfg=None):
-    """Resolve (client_id, client_secret, source) for a mailbox.
+def provider_of(account):
+    """The OAuth provider for a mailbox ('google' | 'microsoft')."""
+    p = (account or {}).get("provider") or DEFAULT_PROVIDER
+    return p if p in PROVIDERS else DEFAULT_PROVIDER
 
-    Order: the mailbox's own override -> config['oauth'] -> environment /
-    oauth_defaults. `source` is a short human string for the UI."""
+
+def imap_host(provider):
+    return PROVIDERS.get(provider, PROVIDERS[DEFAULT_PROVIDER])["imap_host"]
+
+
+def provider_label(provider):
+    return PROVIDERS.get(provider, PROVIDERS[DEFAULT_PROVIDER])["label"]
+
+
+# --------------------------------------------------------------------------- creds
+def _cfg_keys(provider):
+    return (f"{provider}_client_id", f"{provider}_client_secret",
+            f"MMT_{provider.upper()}_CLIENT_ID", f"MMT_{provider.upper()}_CLIENT_SECRET")
+
+
+def client_creds(account=None, cfg=None, provider=None):
+    """Resolve (client_id, client_secret, source) for a mailbox/provider.
+
+    Order: the mailbox's own override -> config['oauth'] -> the bundled default
+    (env / oauth_defaults). `source` is a short human string for the UI."""
+    provider = provider or provider_of(account)
+    id_key, sec_key, env_id, env_sec = _cfg_keys(provider)
     if account:
         cid = (account.get("oauth_client_id") or "").strip()
         csec = (account.get("oauth_client_secret") or "").strip()
@@ -43,20 +93,20 @@ def client_creds(account=None, cfg=None):
             return cid, csec, "this mailbox"
     cfg = cfg or config.load()
     o = cfg.get("oauth", {}) or {}
-    cid = (o.get("google_client_id") or "").strip()
-    csec = (o.get("google_client_secret") or "").strip()
+    cid = (o.get(id_key) or "").strip()
+    csec = (o.get(sec_key) or "").strip()
     if cid:
         return cid, csec, "Settings"
     if oauth_defaults:
-        cid = (getattr(oauth_defaults, "GOOGLE_CLIENT_ID", "") or "").strip()
-        csec = (getattr(oauth_defaults, "GOOGLE_CLIENT_SECRET", "") or "").strip()
+        cid = (getattr(oauth_defaults, env_id, "") or "").strip()
+        csec = (getattr(oauth_defaults, env_sec, "") or "").strip()
         if cid:
             return cid, csec, "bundled default"
     return "", "", "none"
 
 
-def have_client(account=None, cfg=None):
-    return bool(client_creds(account, cfg)[0])
+def have_client(account=None, cfg=None, provider=None):
+    return bool(client_creds(account, cfg, provider)[0])
 
 
 # --------------------------------------------------------------------------- token store
@@ -115,7 +165,7 @@ def _post_form(url, fields):
 
 
 class _CatchHandler(http.server.BaseHTTPRequestHandler):
-    """One-shot handler that captures the ?code=... redirect from Google."""
+    """One-shot handler that captures the ?code=... redirect."""
     result = {}
 
     def do_GET(self):
@@ -150,38 +200,47 @@ def _pkce():
 
 
 # --------------------------------------------------------------------------- the flow
-def authorize(email, client_id, client_secret="", timeout=180, open_browser=True):
-    """Run the interactive Google sign-in for `email`. Blocks until the user
-    finishes in the browser (or `timeout` seconds pass). On success the refresh
-    token is stored. Returns (ok: bool, message: str).
+def authorize(email, provider="google", client_id="", client_secret="",
+              timeout=180, open_browser=True):
+    """Run the interactive sign-in for `email` on `provider`. Blocks until the
+    user finishes in the browser (or `timeout` seconds pass). On success the
+    refresh token is stored. Returns (ok: bool, message: str).
 
     Safe to run in a background thread — it does no Qt work."""
+    P = PROVIDERS.get(provider)
+    if not P:
+        return False, f"Unknown provider: {provider}"
     if not client_id:
-        return False, ("No Google OAuth client configured. Add a Client ID in "
-                       "Settings, or build with a bundled default.")
+        return False, (f"No {P['label']} OAuth client configured. Add a Client ID in "
+                       f"Settings, or build with a bundled default.")
     verifier, challenge = _pkce()
     state = secrets.token_urlsafe(16)
 
-    # loopback server on an ephemeral port (Google allows any 127.0.0.1 port)
+    # loopback server on an ephemeral port. Bind on 127.0.0.1, but advertise the
+    # redirect as http://localhost:<port>/ . Microsoft ignores the port (and allows
+    # the http scheme) ONLY for the *localhost* host, and treats "localhost" and
+    # "127.0.0.1" as DIFFERENT registered redirect URIs. The public-client redirect
+    # users register is http://localhost, so the host here must be localhost or the
+    # sign-in fails with AADSTS50011 (reply-URL mismatch). Google's loopback flow
+    # accepts localhost equally, so this is correct for both providers.
     httpd = http.server.HTTPServer(("127.0.0.1", 0), _CatchHandler)
     httpd.timeout = timeout
     port = httpd.server_address[1]
-    redirect_uri = f"http://127.0.0.1:{port}/"
+    redirect_uri = f"http://localhost:{port}/"
     _CatchHandler.result = {}
 
     params = {
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": SCOPE,
-        "access_type": "offline",
-        "prompt": "consent",               # always return a refresh token
+        "scope": P["scope"],
         "login_hint": email or "",
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    url = AUTH_URI + "?" + urllib.parse.urlencode(params)
+    params.update(P.get("extra_auth", {}))
+    url = P["auth_uri"] + "?" + urllib.parse.urlencode(params)
 
     if open_browser:
         try:
@@ -189,14 +248,11 @@ def authorize(email, client_id, client_secret="", timeout=180, open_browser=True
         except Exception:
             pass
 
-    # wait (in this thread) for the single redirect
-    got = {"done": False}
-
     def _serve():
         try:
             httpd.handle_request()          # blocks until one request or timeout
-        finally:
-            got["done"] = True
+        except Exception:
+            pass
 
     th = threading.Thread(target=_serve, daemon=True)
     th.start()
@@ -213,7 +269,7 @@ def authorize(email, client_id, client_secret="", timeout=180, open_browser=True
     if res.get("state") != state:
         return False, "Sign-in aborted: state mismatch (possible CSRF). Try again."
     if "error" in res:
-        return False, "Google returned: " + res.get("error", "unknown error")
+        return False, f"{P['label']} returned: " + res.get("error", "unknown error")
     code = res.get("code")
     if not code:
         return False, "No authorization code was returned. Try again."
@@ -227,30 +283,34 @@ def authorize(email, client_id, client_secret="", timeout=180, open_browser=True
     }
     if client_secret:
         fields["client_secret"] = client_secret
-    tok = _post_form(TOKEN_URI, fields)
+    if P.get("send_scope_on_token"):
+        fields["scope"] = P["scope"]
+    tok = _post_form(P["token_uri"], fields)
     if "error" in tok or "access_token" not in tok:
         return False, ("Token exchange failed: "
                        + tok.get("error_description", tok.get("error", "unknown")))
     refresh = tok.get("refresh_token")
     if not refresh:
-        return False, ("Google did not return a refresh token. Remove this app's "
-                       "access at myaccount.google.com/permissions and try again.")
+        return False, (f"{P['label']} did not return a refresh token. Remove this "
+                       f"app's access in your account settings and try again.")
     with _lock:
         data = _load_tokens()
         data[email] = {
-            "provider": "google",
+            "provider": provider,
             "refresh_token": refresh,
             "access_token": tok.get("access_token", ""),
             "expiry": time.time() + int(tok.get("expires_in", 3600)) - 60,
             "client_id": client_id,
             "client_secret": client_secret,
-            "scope": tok.get("scope", SCOPE),
+            "scope": tok.get("scope", P["scope"]),
         }
         _save_tokens(data)
-    return True, "Signed in with Google."
+    return True, f"Signed in with {P['label']}."
 
 
 def _refresh(email, rec):
+    provider = rec.get("provider", DEFAULT_PROVIDER)
+    P = PROVIDERS.get(provider, PROVIDERS[DEFAULT_PROVIDER])
     fields = {
         "client_id": rec.get("client_id", ""),
         "grant_type": "refresh_token",
@@ -258,12 +318,17 @@ def _refresh(email, rec):
     }
     if rec.get("client_secret"):
         fields["client_secret"] = rec["client_secret"]
-    tok = _post_form(TOKEN_URI, fields)
+    if P.get("send_scope_on_token"):
+        fields["scope"] = P["scope"]
+    tok = _post_form(P["token_uri"], fields)
     if "access_token" not in tok:
         raise RuntimeError("token refresh failed: "
                            + tok.get("error_description", tok.get("error", "unknown")))
     rec["access_token"] = tok["access_token"]
     rec["expiry"] = time.time() + int(tok.get("expires_in", 3600)) - 60
+    # Microsoft may rotate the refresh token — keep the newest one.
+    if tok.get("refresh_token"):
+        rec["refresh_token"] = tok["refresh_token"]
     with _lock:
         data = _load_tokens()
         data[email] = rec
@@ -276,8 +341,8 @@ def access_token(email):
     Raises RuntimeError if the mailbox has never been signed in."""
     rec = _load_tokens().get(email or "")
     if not rec or not rec.get("refresh_token"):
-        raise RuntimeError(f"{email} is not signed in with Google. Open Settings "
-                           f"and use 'Sign in with Google'.")
+        raise RuntimeError(f"{email} is not signed in. Open Settings and use "
+                           f"'Sign in with Google' or 'Sign in with Microsoft'.")
     if rec.get("access_token") and time.time() < float(rec.get("expiry", 0)):
         return rec["access_token"]
     return _refresh(email, rec)

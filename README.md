@@ -7,8 +7,8 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#download--install)
 [![Download](https://img.shields.io/badge/Download-Releases-brightgreen.svg)](https://github.com/OWNER/REPO/releases)
 
-Mail Money Tracker is a native **PyQt5** desktop app. It connects to your Gmail over
-**read-only IMAP**, finds the "you spent ₹…" / "you received ₹…" alert emails your banks
+Mail Money Tracker is a native **PyQt5** desktop app. It connects to your Gmail or Outlook
+over **read-only IMAP**, finds the "you spent ₹…" / "you received ₹…" alert emails your banks
 already send you, parses out the amount, direction and merchant, pops a Windows desktop
 notification, and lets you categorise and analyse where your money goes. Everything stays
 on your machine.
@@ -24,8 +24,9 @@ on your machine.
 
 - **Reads the emails you already get.** No screen-scraping, no bank credentials, no
   third-party aggregator. Just the transaction alerts your bank emails you.
-- **Two safe sign-in methods** — [Sign in with Google (OAuth2)](#sign-in-with-google-recommended)
-  (browser-based, no password ever stored) or a [Gmail app password](#use-a-gmail-app-password).
+- **Three safe sign-in methods** — [Sign in with Google](#sign-in-with-google-recommended) or
+  [Microsoft / Outlook](#sign-in-with-microsoft-outlook) (browser-based OAuth2, no password
+  ever stored), or a [Gmail app password](#use-a-gmail-app-password).
 - **Smart parser** that pulls the amount + currency out of messy alert text while
   deliberately ignoring "available balance" and "credit limit" figures, detects the
   direction (money in vs money out), and extracts the merchant, card (e.g. `XX1009`) and bank.
@@ -123,7 +124,8 @@ On first run the app creates a local `config.json` with sensible defaults; a shi
 add mailboxes and tune settings entirely from the **Settings** page — you don't need to
 hand-edit JSON.
 
-Each Gmail mailbox needs **one** of the two sign-in methods below.
+Each mailbox needs **one** of the three sign-in methods below — Google and Microsoft use
+browser-based OAuth2; Gmail also supports an app password.
 
 ### Sign in with Google (recommended)
 
@@ -131,7 +133,7 @@ The browser-based OAuth2 flow: you grant access in your browser and the app stor
 refresh token in `tokens.json` — **your password is never entered or stored.**
 
 If your copy of the app already ships with a Google client (see
-[Ship your own Google client](#ship-your-own-google-client)), just open **Settings**, click
+[Ship your own OAuth client(s)](#ship-your-own-oauth-clients)), just open **Settings**, click
 **Sign in with Google (OAuth2)** on the mailbox, and complete the browser prompt.
 
 If it doesn't, you'll need a free Google Cloud OAuth **Desktop app** client (about 3
@@ -153,6 +155,32 @@ minutes):
 > works for accounts you added as **Test users** (up to 100), which is perfectly fine for
 > personal / family / small use. Distributing to the general public would require going
 > through Google's app verification (and possibly a CASA security assessment).
+
+### Sign in with Microsoft (Outlook)
+
+For **Outlook.com / Hotmail / Live / Office 365** mailboxes, use Microsoft OAuth2. (Microsoft
+has disabled app passwords / basic auth for most accounts, so OAuth is the way in.) As with
+Google, you grant access in your browser and only a refresh token is stored — no password.
+
+If your copy ships with a Microsoft client, just pick **Sign in with Microsoft / Outlook
+(OAuth2)** on the mailbox and complete the prompt. Otherwise register a free client (a few
+minutes):
+
+1. Go to the [Azure Portal](https://portal.azure.com/) → **Microsoft Entra ID** (Azure AD) →
+   **App registrations** → **New registration**.
+2. Name it. Under **Supported account types** choose **Accounts in any organizational
+   directory and personal Microsoft accounts** so personal Outlook accounts work.
+3. Under **Redirect URI**, pick platform **Mobile and desktop applications** and add
+   **`http://localhost`**. This makes it a **public client** — no client secret needed.
+4. Click **Register** and copy the **Application (client) ID**.
+5. In the app, open **Settings → Google / Microsoft sign-in setup (advanced)**, paste the ID
+   into the **Microsoft** section (leave the secret blank), and save. Then click **Sign in
+   with Microsoft / Outlook (OAuth2)** on your mailbox.
+
+> The app requests the read-only `IMAP.AccessAsUser.All` scope and connects to
+> `outlook.office365.com`. As with Google, an unverified app works for accounts you allow;
+> broad public distribution or some work/school tenants may require admin consent or app
+> verification.
 
 ### Use a Gmail app password
 
@@ -215,22 +243,26 @@ again. A background poller checks for new mail on an interval and can even split
 
 ---
 
-## Ship your own Google client
+## Ship your own OAuth client(s)
 
-If you're the maintainer cutting releases and want your users to "Sign in with Google" with
-**zero setup**, bundle a Google **Desktop app** OAuth client. The client is resolved in this
-order (first non-empty wins), per `oauth.py`:
+If you're the maintainer cutting releases and want your users to "Sign in with Google" and/or
+"Sign in with Microsoft" with **zero setup**, bundle an OAuth client. Each provider's client
+is resolved in this order (first non-empty wins), per `oauth.py`:
 
 1. A per-mailbox override (set in Settings on the mailbox itself).
-2. `config.json` → `"oauth": { "google_client_id", "google_client_secret" }`.
-3. Environment variables `MMT_GOOGLE_CLIENT_ID` / `MMT_GOOGLE_CLIENT_SECRET`.
+2. `config.json` → `"oauth": { "google_client_id", "google_client_secret",
+   "microsoft_client_id", "microsoft_client_secret" }`.
+3. Environment variables `MMT_GOOGLE_CLIENT_ID` / `MMT_GOOGLE_CLIENT_SECRET` and
+   `MMT_MICROSOFT_CLIENT_ID` / `MMT_MICROSOFT_CLIENT_SECRET`.
 4. The constants in [`oauth_defaults.py`](oauth_defaults.py).
 
-The **recommended** approach is to inject the client at **build time** via the `MMT_*`
+The **recommended** approach is to inject the client(s) at **build time** via the `MMT_*`
 environment variables — store them as GitHub repo secrets and have the release workflow read
-them, so no secret is committed to the repository. (For a Desktop-app client Google does not
-treat the secret as confidential, but keeping it out of a public repo is still best practice.)
-Leave both blank to require each user to paste their own client in Settings.
+them, so no secret is committed to the repository. (Google's Desktop-app client secret and
+Microsoft's public client are both non-confidential by design, but keeping any secret out of a
+public repo is still best practice.) Leave a provider blank to require each user to paste their
+own client in Settings. Google uses a **Desktop app** client (ID + secret); Microsoft uses a
+**public client** (ID only).
 
 ---
 
@@ -248,8 +280,8 @@ see [CONTRIBUTING.md](CONTRIBUTING.md).
 | Path | What it is |
 |------|------------|
 | `app.py` | Entry point — window, sidebar, pages (Overview, Review, Transactions, Scan mailbox, Parser, Settings), dialogs, tray notifications. |
-| `oauth.py` | Pure-stdlib Google OAuth2 "installed app" loopback flow with PKCE; XOAUTH2 for IMAP. |
-| `oauth_defaults.py` | Optional bundled Google client (reads the `MMT_*` env vars). |
+| `oauth.py` | Pure-stdlib Google **and** Microsoft OAuth2 "installed app" loopback flow with PKCE; XOAUTH2 for IMAP (Gmail + Outlook). |
+| `oauth_defaults.py` | Optional bundled Google/Microsoft clients (reads the `MMT_*` env vars). |
 | `mailreader.py` | IMAP login (XOAUTH2 or app password), fetching, and the transaction parser. |
 | `categorize.py` | Category list, auto-categorisation, and credit-card-bill detection. |
 | `notify.py` | Desktop notifications (`windows-toasts` → `winotify` → `plyer` → console). |

@@ -19,9 +19,11 @@ DEFAULT = {
         {"name": "CRED",        "from_contains": "cred.club",   "subject_contains": "", "match": "from", "primary": "from"},
     ],
     "ignore_senders": ["noreply@google.com", "no-reply@accounts.google.com"],
-    # OAuth client used for "Sign in with Google". Left blank here; may be
-    # supplied per-mailbox, via these keys, an env var, or a bundled default.
-    "oauth": {"google_client_id": "", "google_client_secret": ""},
+    # OAuth clients used for "Sign in with Google / Microsoft". Left blank here;
+    # may be supplied per-mailbox, via these keys, an env var, or a bundled
+    # default. Microsoft uses a public client (no secret needed).
+    "oauth": {"google_client_id": "", "google_client_secret": "",
+              "microsoft_client_id": "", "microsoft_client_secret": ""},
 }
 
 

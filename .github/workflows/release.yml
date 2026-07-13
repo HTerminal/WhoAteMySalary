@@ -53,11 +53,13 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build with PyInstaller
-        # The MMT_* vars bake a default OAuth client into the shipped app when the
+        # The MMT_* vars bake default OAuth client(s) into the shipped app when the
         # maintainer has set the matching repo secrets; empty otherwise (harmless).
         env:
           MMT_GOOGLE_CLIENT_ID: ${{ secrets.MMT_GOOGLE_CLIENT_ID }}
           MMT_GOOGLE_CLIENT_SECRET: ${{ secrets.MMT_GOOGLE_CLIENT_SECRET }}
+          MMT_MICROSOFT_CLIENT_ID: ${{ secrets.MMT_MICROSOFT_CLIENT_ID }}
+          MMT_MICROSOFT_CLIENT_SECRET: ${{ secrets.MMT_MICROSOFT_CLIENT_SECRET }}
         run: pyinstaller MailMoneyTracker.spec
 
       # ---- Package the one-folder output per OS -----------------------------

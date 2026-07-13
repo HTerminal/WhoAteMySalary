@@ -45,8 +45,20 @@ class PollerWorker(QThread):
         net_error = False
         for acc in accts:
             label = acc.get("label", "?")
-            if not acc.get("email") or not acc.get("app_password"):
-                self._log(f"  {label}: skipped (missing email/app-password).")
+            if not acc.get("email"):
+                self._log(f"  {label}: skipped (missing email).")
+                continue
+            # OAuth mailboxes (Google/Microsoft) have no app password — they sign in
+            # with a stored refresh token. Require a token for those, and an app
+            # password only for the app-password method. (Previously this required an
+            # app_password for every account, which silently skipped all OAuth ones.)
+            if mailreader._is_oauth(acc):
+                import oauth
+                if not oauth.has_token(acc["email"]):
+                    self._log(f"  {label}: skipped (not signed in — use 'Sign in' in Settings).")
+                    continue
+            elif not acc.get("app_password"):
+                self._log(f"  {label}: skipped (missing app password).")
                 continue
             # everything for one account is guarded so nothing can escape and
             # leave the UI stuck on "Checking…"
@@ -212,21 +224,24 @@ class ScanWorker(QThread):
 
 
 class OAuthWorker(QThread):
-    """Runs the interactive Google sign-in (opens the browser, waits for the
-    loopback redirect) off the UI thread so the window stays responsive."""
-    done = pyqtSignal(dict)              # {ok, message, email}
+    """Runs the interactive OAuth sign-in (opens the browser, waits for the
+    loopback redirect) off the UI thread so the window stays responsive.
+    provider is 'google' or 'microsoft'."""
+    done = pyqtSignal(dict)              # {ok, message, email, provider}
 
-    def __init__(self, email, client_id, client_secret=""):
+    def __init__(self, email, provider, client_id, client_secret=""):
         super().__init__()
-        self.email, self.cid, self.csec = email, client_id, client_secret
+        self.email, self.provider = email, provider
+        self.cid, self.csec = client_id, client_secret
 
     def run(self):
         try:
             import oauth
-            ok, msg = oauth.authorize(self.email, self.cid, self.csec)
+            ok, msg = oauth.authorize(self.email, self.provider, self.cid, self.csec)
         except Exception as e:
             ok, msg = False, f"{type(e).__name__}: {e}"
-        self.done.emit({"ok": ok, "message": msg, "email": self.email})
+        self.done.emit({"ok": ok, "message": msg, "email": self.email,
+                        "provider": self.provider})
 
 
 class _Cancelled(Exception):

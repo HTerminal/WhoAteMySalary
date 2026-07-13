@@ -33,7 +33,10 @@ DEMO_CFG = {
     "poll_interval_seconds": 60, "backfill_days": 3, "notifications": True,
     "animations": True, "track_all_amount_emails": False,
     "accounts": [
-        {"label": "Personal", "email": "you@example.com", "auth": "oauth", "folder": "INBOX"},
+        {"label": "Personal", "email": "you@example.com", "auth": "oauth",
+         "provider": "google", "folder": "INBOX"},
+        {"label": "Work", "email": "you@outlook.com", "auth": "oauth",
+         "provider": "microsoft", "folder": "INBOX"},
         {"label": "Cards", "email": "you.cards@example.com", "auth": "app_password",
          "app_password": "xxxxxxxxxxxxxxxx", "folder": "INBOX"},
     ],
@@ -51,8 +54,9 @@ with open(config.CONFIG_PATH, "w", encoding="utf-8") as f:
     json.dump(DEMO_CFG, f)
 with open(oauth.TOKENS_PATH, "w", encoding="utf-8") as f:              # fake "connected"
     json.dump({"you@example.com": {"provider": "google", "refresh_token": "DEMO",
-                                   "access_token": "DEMO", "expiry": 9e9,
-                                   "client_id": "demo"}}, f)
+                                   "access_token": "DEMO", "expiry": 9e9, "client_id": "demo"},
+               "you@outlook.com": {"provider": "microsoft", "refresh_token": "DEMO",
+                                   "access_token": "DEMO", "expiry": 9e9, "client_id": "demo"}}, f)
 
 db.init(); cache.init()
 

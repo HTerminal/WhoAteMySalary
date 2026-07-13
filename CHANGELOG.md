@@ -11,11 +11,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   password. Implemented as a pure-stdlib Google "installed app" loopback flow
   with PKCE; tokens are cached locally in `tokens.json` (git-ignored) and used
   for IMAP via XOAUTH2.
+- **Sign in with Microsoft / Outlook (OAuth2)** — the same browser-based flow
+  for Outlook.com / Hotmail / Office 365 mailboxes, using a public (native)
+  Azure client (PKCE, no secret), the `IMAP.AccessAsUser.All` scope, and
+  `outlook.office365.com` for IMAP. App-password sign-in stays Gmail-only.
 - **Bundled OAuth client option** — maintainers can ship a default Google
-  "Desktop app" client by setting `MMT_GOOGLE_CLIENT_ID` /
-  `MMT_GOOGLE_CLIENT_SECRET` at build time (the release workflow reads these
+  "Desktop app" client and/or a Microsoft public client by setting
+  `MMT_GOOGLE_CLIENT_ID` / `MMT_GOOGLE_CLIENT_SECRET` and
+  `MMT_MICROSOFT_CLIENT_ID` at build time (the release workflow reads these
   from repo secrets) or by editing `oauth_defaults.py`. Users without a bundled
-  client can paste their own in Settings → "Google sign-in setup (advanced)".
+  client can paste their own in Settings → "Google / Microsoft sign-in setup
+  (advanced)".
 - Documentation overhaul: rewritten README with setup and Google Cloud OAuth
   walkthrough, plus app screenshots under `docs/screenshots/`.
 - **Release CI** — GitHub Actions workflow builds one-folder PyInstaller apps
