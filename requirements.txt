@@ -1,0 +1,10 @@
+# Core (all platforms)
+PyQt5>=5.15
+
+# Windows desktop notifications (optional — falls back gracefully if missing)
+windows-toasts; platform_system == "Windows"
+winotify;       platform_system == "Windows"
+pywin32;        platform_system == "Windows"
+
+# Cross-platform notification fallback (macOS / Linux)
+plyer; platform_system != "Windows"

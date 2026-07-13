@@ -1,0 +1,31 @@
+{
+  "poll_interval_seconds": 60,
+  "backfill_days": 3,
+  "track_all_amount_emails": false,
+  "notifications": true,
+  "animations": true,
+  "accounts": [
+    {
+      "label": "My Gmail",
+      "email": "you@gmail.com",
+      "auth": "app_password",
+      "app_password": "your-16-char-app-password",
+      "folder": "INBOX"
+    }
+  ],
+  "sources": [
+    {
+      "name": "Example bank alerts",
+      "from_contains": "alerts@yourbank.com",
+      "subject_contains": "Transaction Alert",
+      "match": "both",
+      "primary": "from"
+    }
+  ],
+  "ignore_senders": ["noreply@google.com", "no-reply@accounts.google.com"],
+  "custom_categories": [],
+  "oauth": {
+    "google_client_id": "",
+    "microsoft_client_id": ""
+  }
+}

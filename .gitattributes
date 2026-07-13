@@ -1,0 +1,14 @@
+# Normalise line endings across Windows / macOS / Linux contributors.
+* text=auto eol=lf
+
+# Windows-only launchers keep CRLF so they run correctly on Windows.
+*.bat  text eol=crlf
+*.vbs  text eol=crlf
+
+# Binary assets — never touch.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.db   binary

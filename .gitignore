@@ -1,0 +1,32 @@
+# ---- personal data & credentials (NEVER commit these) ----
+config.json
+data.db
+data.db-wal
+data.db-shm
+cache.db
+cache.db-wal
+cache.db-shm
+transactions_export.csv
+*.bak
+*.db.bak_*
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- build artifacts ----
+build/
+dist/
+*.spec
+!MailMoneyTracker.spec
+_caret.png
+
+# ---- os / editor ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
