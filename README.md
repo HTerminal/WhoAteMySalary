@@ -1,20 +1,40 @@
-# Mail Money Tracker
+<p align="center">
+  <img src="docs/icon.png" width="120" alt="WhoAteMySalary — the Money Goblin ate your salary">
+</p>
 
-**Turn your bank's transaction-alert emails into a private, local spending dashboard — no bank logins, no cloud, no spreadsheets.**
+# WhoAteMySalary
+
+**See exactly where your salary went — a private, local spending dashboard built from the bank
+transaction-alert emails you already get. Free, and all you need is one Gmail.**
 
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#download--install)
 [![Download](https://img.shields.io/badge/Download-Releases-brightgreen.svg)](https://github.com/OWNER/REPO/releases)
 
-Mail Money Tracker is a native **PyQt5** desktop app. It connects to your Gmail or Outlook
+WhoAteMySalary is a native **PyQt5** desktop app. It connects to your Gmail or Outlook
 over **read-only IMAP**, finds the "you spent ₹…" / "you received ₹…" alert emails your banks
 already send you, parses out the amount, direction and merchant, pops a Windows desktop
-notification, and lets you categorise and analyse where your money goes. Everything stays
-on your machine.
+notification, and lets you categorise and analyse where your money goes. It's **free**, works
+with **just one Gmail account**, and everything stays **on your machine** — you stay in control
+of your data.
 
 > Replace `OWNER/REPO` in the links above with your actual GitHub repository
-> (suggested name: **`mail-money-tracker`**).
+> (suggested name: **`who-ate-my-salary`**).
+
+## Why you'll like it
+
+- 💸 **Free, forever.** No subscription, no server bills, no ads — it runs entirely on your
+  own computer.
+- 📬 **One Gmail is all you need.** No new account to create, no bank login, no third-party
+  aggregator to trust — it just reads the transaction-alert emails your bank already sends.
+- 🔒 **You control your data.** Your transactions, settings and tokens never leave your
+  machine; the app makes only **read-only** IMAP connections and uploads nothing, anywhere.
+- 🎛️ **Track it your way.** Your own categories, filters and parser rules — bend it to how
+  *you* think about money.
+- 🖥️ **Runs everywhere.** Windows, macOS and Linux, from a single download.
+- 🧌 **Meet the Money Goblin** — the little gremlin that ate your salary now owns up to it,
+  announcing every new transaction and (charmingly) nagging you to categorise it.
 
 ![Overview dashboard](docs/screenshots/overview.png)
 
@@ -24,9 +44,10 @@ on your machine.
 
 - **Reads the emails you already get.** No screen-scraping, no bank credentials, no
   third-party aggregator. Just the transaction alerts your bank emails you.
-- **Three safe sign-in methods** — [Sign in with Google](#sign-in-with-google-recommended) or
-  [Microsoft / Outlook](#sign-in-with-microsoft-outlook) (browser-based OAuth2, no password
-  ever stored), or a [Gmail app password](#use-a-gmail-app-password).
+- **Three sign-in methods** — a [Gmail app password](#use-a-gmail-app-password) (✅ **tested**),
+  or browser-based OAuth2 for [Google](#sign-in-with-google-oauth2) or
+  [Microsoft / Outlook](#sign-in-with-microsoft-outlook) (⚠️ **not yet verified end-to-end**) —
+  none of which store your password.
 - **Smart parser** that pulls the amount + currency out of messy alert text while
   deliberately ignoring "available balance" and "credit limit" figures, detects the
   direction (money in vs money out), and extracts the merchant, card (e.g. `XX1009`) and bank.
@@ -43,6 +64,8 @@ on your machine.
   large transactions.
 - **Review queue** — every newly detected transaction appears for a quick verify /
   categorise / skip, with a desktop notification.
+- **The Money Goblin** — a playful mascot announces each new transaction ("🧌 The Money
+  Goblin sniffed out a new receipt") and reminds you what still needs a category.
 - **Desktop notifications** on Windows (Action Center, with sound) via `windows-toasts`,
   degrading gracefully to `winotify` → `plyer` → console. A **Send test notification**
   button lets you confirm alerts work.
@@ -79,21 +102,25 @@ alert email and watch the 4-step pipeline explain its decision.
 Grab the latest build for your OS from the
 [**Releases**](https://github.com/OWNER/REPO/releases) page.
 
+Each release attaches a ready-to-run bundle per OS (built automatically by CI — see
+[Building releases](#building-releases)).
+
 ### Windows
-Download the `.exe` (or installer), then run it. Windows SmartScreen may warn about an
-unrecognised publisher on first launch — click **More info → Run anyway**.
+Download **`WhoAteMySalary-windows.zip`**, unzip it anywhere, and run **`WhoAteMySalary.exe`**.
+Windows SmartScreen may warn about an unrecognised publisher on first launch — click
+**More info → Run anyway**.
 
 ### macOS
-Download the `.dmg`, open it, and drag the app to **Applications**. Because the build is
-not notarised, the first launch is blocked by Gatekeeper — **right-click (or Control-click)
-the app → Open**, then confirm. You only need to do this once.
+Download **`WhoAteMySalary-macos.zip`**, unzip it, and move **`WhoAteMySalary.app`** to
+**Applications**. Because the build isn't notarised, the first launch is blocked by
+Gatekeeper — **right-click (or Control-click) the app → Open**, then confirm. Once only.
 
 ### Linux
-Download the `AppImage`, make it executable, and run it:
+Download **`WhoAteMySalary-linux.tar.gz`**, extract it, and run the launcher:
 
 ```bash
-chmod +x MailMoneyTracker-*.AppImage
-./MailMoneyTracker-*.AppImage
+tar -xzf WhoAteMySalary-linux.tar.gz
+./WhoAteMySalary/WhoAteMySalary
 ```
 
 ### Run from source
@@ -103,7 +130,7 @@ Requires **Python 3.12** (PyQt5 has no wheels for the 3.15 alpha).
 ```bash
 # clone your repo
 git clone https://github.com/OWNER/REPO.git
-cd REPO/mail_tracker_pyqt
+cd REPO
 
 # install dependencies
 py -3.12 -m pip install -r requirements.txt
@@ -124,10 +151,17 @@ On first run the app creates a local `config.json` with sensible defaults; a shi
 add mailboxes and tune settings entirely from the **Settings** page — you don't need to
 hand-edit JSON.
 
-Each mailbox needs **one** of the three sign-in methods below — Google and Microsoft use
-browser-based OAuth2; Gmail also supports an app password.
+Each mailbox needs **one** of the three sign-in methods below.
 
-### Sign in with Google (recommended)
+> **Sign-in status.** The **Gmail app password** method is ✅ **tested and working**
+> end-to-end. The **Google OAuth2** and **Microsoft OAuth2** methods are ⚠️ **implemented but
+> not yet verified end-to-end** — if you try them, feedback (and PRs) are very welcome.
+
+### Sign in with Google (OAuth2)
+
+> ⚠️ **Not yet tested.** This flow is fully implemented but has not been verified end-to-end
+> against a live Google account. For a known-working setup today, use a
+> [Gmail app password](#use-a-gmail-app-password).
 
 The browser-based OAuth2 flow: you grant access in your browser and the app stores only a
 refresh token in `tokens.json` — **your password is never entered or stored.**
@@ -150,13 +184,17 @@ minutes):
 5. In the app, open **Settings → Google sign-in setup (advanced)** and paste the Client ID
    and secret, then save. Now click **Sign in with Google (OAuth2)** on your mailbox.
 
-> **Restricted-scope caveat.** Mail Money Tracker uses Gmail's `https://mail.google.com/`
+> **Restricted-scope caveat.** WhoAteMySalary uses Gmail's `https://mail.google.com/`
 > scope, which Google classifies as a **restricted scope**. An **unverified** app only
 > works for accounts you added as **Test users** (up to 100), which is perfectly fine for
 > personal / family / small use. Distributing to the general public would require going
 > through Google's app verification (and possibly a CASA security assessment).
 
 ### Sign in with Microsoft (Outlook)
+
+> ⚠️ **Not yet tested.** This flow is fully implemented but has not been verified end-to-end
+> against a live Microsoft account. If your Outlook account can't use an app password, this is
+> your only option — please report back how it goes.
 
 For **Outlook.com / Hotmail / Live / Office 365** mailboxes, use Microsoft OAuth2. (Microsoft
 has disabled app passwords / basic auth for most accounts, so OAuth is the way in.) As with
@@ -184,6 +222,9 @@ minutes):
 
 ### Use a Gmail app password
 
+> ✅ **Tested and working.** This is the sign-in method verified end-to-end — the
+> recommended choice today.
+
 If you'd rather not set up OAuth, use a 16-character Gmail **app password**:
 
 1. Enable **2-Step Verification** on your Google account.
@@ -203,6 +244,24 @@ Settings — each source matches on the sender (`from_contains`) and/or the subj
 (`subject_contains`), with a match mode (`both` / `from` / `subject` / `either`). You can
 also list **ignore senders** to always skip. The bundled defaults include Canara Bank,
 PNB and CRED as examples.
+
+---
+
+## Log expenses by voice (Siri + Apple Shortcut)
+
+On iPhone / iPad / Mac you can log a cash or UPI spend **hands-free**. Build a small Apple
+Shortcut that emails *yourself* a bank-style alert, and WhoAteMySalary files it like any real
+transaction — so you can add expenses with Siri:
+
+> "Hey Siri, **Log an Expense**" → *"What is the amount?"* → *"What's it for?"* → 🧌 it lands
+> in **Review**.
+
+Full step-by-step (with screenshots): **[docs/APPLE_SHORTCUT.md](docs/APPLE_SHORTCUT.md)**.
+
+<p>
+  <img src="docs/apple-shortcut/03-shortcut-actions.jpg" width="240" alt="The Log an Expense shortcut">
+  <img src="docs/apple-shortcut/06-app-filter.png" width="330" alt="Matching filter in the app">
+</p>
 
 ---
 
@@ -297,7 +356,7 @@ runtime and git-ignored.
 
 ## License
 
-Mail Money Tracker is released under the **GNU General Public License v3.0** — see
+WhoAteMySalary is released under the **GNU General Public License v3.0** — see
 [LICENSE](LICENSE). It bundles PyQt5, which is itself GPL-licensed.
 
 ---
@@ -311,7 +370,7 @@ a dev environment, run the app from source, and build releases.
 
 ## Disclaimer
 
-Mail Money Tracker is an independent project and is **not affiliated with, endorsed by, or
+WhoAteMySalary is an independent project and is **not affiliated with, endorsed by, or
 sponsored by Google or any bank**. It reads transaction-alert emails on a best-effort basis;
 parsing may be imperfect, so always verify against your official bank statements. This
 software does **not** provide financial advice.

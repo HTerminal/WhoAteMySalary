@@ -1,6 +1,6 @@
-# Contributing to Mail Money Tracker
+# Contributing to WhoAteMySalary
 
-Thanks for taking the time to contribute! Mail Money Tracker is a small, native
+Thanks for taking the time to contribute! WhoAteMySalary is a small, native
 **PyQt5 desktop app** that reads bank/transaction-alert emails over Gmail IMAP,
 detects and categorises transactions, sends Windows desktop notifications, and
 helps you analyse your spending. Everything runs and stays **on your own
@@ -12,7 +12,7 @@ constraint is a feature: it keeps the app easy to build, audit, and package.
 Please keep it that way (see [Coding style](#coding-style)).
 
 > Replace `OWNER/REPO` throughout with the real GitHub path once the repo is
-> published. The suggested repository name is **`mail-money-tracker`**.
+> published. The suggested repository name is **`who-ate-my-salary`**.
 
 ---
 

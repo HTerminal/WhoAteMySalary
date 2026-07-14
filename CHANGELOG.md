@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+### Added
+- **The Money Goblin** — a mascot that announces new transactions and nags you (charmingly)
+  to categorise them, in notifications and on the Review page (`goblin.py`).
+- An **app icon** (a bitten ₹ coin — your salary, getting eaten) used for the window, tray,
+  taskbar and packaged builds, plus a generator (`tools/make_icon.py`).
+- **Log expenses by voice** guide — an Apple Shortcut + Siri recipe that emails yourself a
+  bank-style alert the app then tracks (`docs/APPLE_SHORTCUT.md`).
+- README value-proposition section (free, one Gmail, your data stays local, track it your
+  way) and a hero icon.
+
+### Changed
+- **Renamed the project to WhoAteMySalary** (window title, notifications/AppUserModelID,
+  PyInstaller spec, docs, and the suggested repo name `who-ate-my-salary`).
+- README now labels sign-in methods by test status: the **Gmail app password** is tested and
+  working; **Google** and **Microsoft** OAuth2 are implemented but not yet verified end-to-end.
 
 ## [1.1.0]
 ### Added
@@ -35,7 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [1.0.0]
 ### Added
-- First public release of **Mail Money Tracker** (PyQt5 desktop app).
+- First public release of **WhoAteMySalary** (PyQt5 desktop app).
 - Reads bank/transaction-alert emails over IMAP and turns them into transactions.
 - Dashboard: KPIs (money out / credit-card bills / money in / net / count), an
   interactive donut, month-by-month bars, incoming-by-source, an expandable
