@@ -1,11 +1,11 @@
-# Build & publish Mail Money Tracker desktop binaries.
+# Build & publish WhoAteMySalary desktop binaries.
 #
 # Triggers on any pushed tag shaped like v1.2.3 (and on manual dispatch so you
 # can test the pipeline without cutting a real tag).
 #
 # Flow:
 #   1. `build`   - matrix over Windows / macOS / Linux; runs PyInstaller against
-#                  MailMoneyTracker.spec and uploads a per-OS archive artifact.
+#                  WhoAteMySalary.spec and uploads a per-OS archive artifact.
 #   2. `release` - downloads every artifact, pulls this version's notes out of
 #                  CHANGELOG.md, and creates a GitHub Release with the archives
 #                  attached.
@@ -60,18 +60,18 @@ jobs:
           MMT_GOOGLE_CLIENT_SECRET: ${{ secrets.MMT_GOOGLE_CLIENT_SECRET }}
           MMT_MICROSOFT_CLIENT_ID: ${{ secrets.MMT_MICROSOFT_CLIENT_ID }}
           MMT_MICROSOFT_CLIENT_SECRET: ${{ secrets.MMT_MICROSOFT_CLIENT_SECRET }}
-        run: pyinstaller MailMoneyTracker.spec
+        run: pyinstaller WhoAteMySalary.spec
 
       # ---- Package the one-folder output per OS -----------------------------
-      # PyInstaller writes to dist/MailMoneyTracker (and dist/MailMoneyTracker.app
+      # PyInstaller writes to dist/WhoAteMySalary (and dist/WhoAteMySalary.app
       # on macOS). We compress that into a single archive named after the OS.
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/MailMoneyTracker/* `
-            -DestinationPath MailMoneyTracker-windows.zip
+          Compress-Archive -Path dist/WhoAteMySalary/* `
+            -DestinationPath WhoAteMySalary-windows.zip
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -79,25 +79,25 @@ jobs:
         run: |
           cd dist
           # Prefer the .app bundle if the spec produced one; fall back to the folder.
-          if [ -d "MailMoneyTracker.app" ]; then
-            zip -r -y ../MailMoneyTracker-macos.zip MailMoneyTracker.app
+          if [ -d "WhoAteMySalary.app" ]; then
+            zip -r -y ../WhoAteMySalary-macos.zip WhoAteMySalary.app
           else
-            zip -r ../MailMoneyTracker-macos.zip MailMoneyTracker
+            zip -r ../WhoAteMySalary-macos.zip WhoAteMySalary
           fi
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
         shell: bash
-        run: tar -czf MailMoneyTracker-linux.tar.gz -C dist MailMoneyTracker
+        run: tar -czf WhoAteMySalary-linux.tar.gz -C dist WhoAteMySalary
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MailMoneyTracker-${{ runner.os }}
+          name: WhoAteMySalary-${{ runner.os }}
           path: |
-            MailMoneyTracker-windows.zip
-            MailMoneyTracker-macos.zip
-            MailMoneyTracker-linux.tar.gz
+            WhoAteMySalary-windows.zip
+            WhoAteMySalary-macos.zip
+            WhoAteMySalary-linux.tar.gz
           # Only one of the three exists per runner; ignore the missing ones.
           if-no-files-found: ignore
           retention-days: 7

@@ -11,6 +11,9 @@ cache.db-shm
 transactions_export.csv
 *.bak
 *.db.bak_*
+# raw, un-redacted personal screenshots — only the redacted copies in
+# docs/apple-shortcut/ are committed.
+images/
 
 # ---- python ----
 __pycache__/
@@ -24,7 +27,7 @@ env/
 build/
 dist/
 *.spec
-!MailMoneyTracker.spec
+!WhoAteMySalary.spec
 _caret.png
 
 # ---- os / editor ----

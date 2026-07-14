@@ -1,7 +1,7 @@
 @echo off
 cd /d "%~dp0"
 echo =============================================
-echo   Mail Money Tracker  -  PyQt5 edition
+echo   WhoAteMySalary  -  PyQt5 edition
 echo =============================================
 echo Launching (Python 3.12 + PyQt5)...
 rmdir /s /q __pycache__ 2>nul

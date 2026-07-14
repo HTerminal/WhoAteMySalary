@@ -1,13 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for Mail Money Tracker.
+"""PyInstaller spec for WhoAteMySalary.
 
-Builds a one-folder, WINDOWED (no console) desktop app named "MailMoneyTracker",
+Builds a one-folder, WINDOWED (no console) desktop app named "WhoAteMySalary",
 entry point app.py.
 
 Build locally with:
-    pyinstaller MailMoneyTracker.spec
+    pyinstaller WhoAteMySalary.spec
 
-This file is intentionally git-tracked (see the "!MailMoneyTracker.spec" exception
+This file is intentionally git-tracked (see the "!WhoAteMySalary.spec" exception
 in .gitignore) so the release CI can use it verbatim on every OS.
 
 Notes:
@@ -31,6 +31,7 @@ from PyInstaller.utils.hooks import collect_all
 # (source_path, destination_dir_inside_bundle)
 datas = [
     ("config.example.json", "."),
+    ("app_icon.png", "."),          # window/tray icon loaded at runtime
 ]
 
 binaries = []
@@ -92,7 +93,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="MailMoneyTracker",
+    name="WhoAteMySalary",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -103,7 +104,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,              # app draws its own icon at runtime
+    icon=("icon.ico" if sys.platform == "win32" else None),
 )
 
 coll = COLLECT(
@@ -114,7 +115,7 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="MailMoneyTracker",
+    name="WhoAteMySalary",
 )
 
 # On macOS, wrap the one-folder build into a proper .app bundle so it launches
@@ -122,9 +123,9 @@ coll = COLLECT(
 if sys.platform == "darwin":
     app = BUNDLE(
         coll,
-        name="MailMoneyTracker.app",
-        icon=None,
-        bundle_identifier="com.mailmoneytracker.desktop",
+        name="WhoAteMySalary.app",
+        icon="icon.icns",
+        bundle_identifier="com.whoatemysalary.desktop",
         info_plist={
             "NSHighResolutionCapable": True,
             "LSApplicationCategoryType": "public.app-category.finance",

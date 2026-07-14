@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Mail Money Tracker — PyQt5 desktop edition.
+"""WhoAteMySalary — PyQt5 desktop edition.
 
 Native Qt GUI: reads Gmail over IMAP, detects bank/transaction alerts, notifies
 you (system tray), and lets you categorise + analyse spending. Smooth rendering,
@@ -34,6 +34,7 @@ import config
 import mailreader
 import notify
 import oauth
+import goblin
 from categorize import EXPENSE_CATEGORIES, INCOME_CATEGORIES
 
 NAV = [
@@ -147,13 +148,30 @@ def date_edit(iso=None):
     return de
 
 
-def make_icon():
-    pm = QPixmap(40, 40); pm.fill(Qt.transparent)
+def _resource(name):
+    """Path to a bundled resource in dev and inside a PyInstaller build."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
+def _app_pixmap(size):
+    """The app icon at `size` px — the generated PNG if present, else a drawn ₹ tile."""
+    path = _resource("app_icon.png")
+    if os.path.isfile(path):
+        pm = QPixmap(path)
+        if not pm.isNull():
+            return pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    pm = QPixmap(size, size); pm.fill(Qt.transparent)
     p = QPainter(pm); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen)
-    p.setBrush(QColor(T.ACCENT)); p.drawRoundedRect(2, 2, 36, 36, 10, 10)
-    p.setPen(QColor("white")); f = QFont(T.FONT, 18); f.setBold(True); p.setFont(f)
+    r = int(size * 0.26)
+    p.setBrush(QColor(T.ACCENT)); p.drawRoundedRect(1, 1, size - 2, size - 2, r, r)
+    p.setPen(QColor("white")); f = QFont(T.FONT, int(size * 0.46)); f.setBold(True); p.setFont(f)
     p.drawText(pm.rect(), Qt.AlignCenter, "₹"); p.end()
-    return QIcon(pm)
+    return pm
+
+
+def make_icon():
+    return QIcon(_app_pixmap(256))
 
 
 class TreeItem(QTreeWidgetItem):
@@ -732,11 +750,13 @@ class InboxPage(Page):
         head.addStretch(1)
         head.addWidget(btn("Check for new", self.win.check_now, "ghost"))
         self.v.addLayout(head)
+        if pend:
+            self.v.addWidget(lbl(goblin.review(len(pend)), color=T.TEXT2, size=10))
         if not pend:
             c = card(); cv = QVBoxLayout(c); cv.setContentsMargins(30, 40, 30, 40); cv.setAlignment(Qt.AlignCenter)
             cv.addWidget(lbl("✓", color=T.GREEN, bold=True, size=32), alignment=Qt.AlignCenter)
             cv.addWidget(lbl("All caught up!", bold=True, size=14), alignment=Qt.AlignCenter)
-            cv.addWidget(lbl("New transactions appear here the moment they arrive.", color=T.MUTED, size=10),
+            cv.addWidget(lbl(goblin.all_clear(), color=T.MUTED, size=10),
                          alignment=Qt.AlignCenter)
             self.v.addWidget(c)
         for r in pend:
@@ -1523,7 +1543,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Mail Money Tracker")
+        self.setWindowTitle("WhoAteMySalary")
         self.setWindowIcon(make_icon())
         self.resize(1240, 820)
         self.setMinimumSize(1080, 700)
@@ -1557,7 +1577,7 @@ class MainWindow(QMainWindow):
 
         # tray
         self.tray = QSystemTrayIcon(make_icon(), self)
-        self.tray.setToolTip("Mail Money Tracker")
+        self.tray.setToolTip("WhoAteMySalary")
         try:
             self.tray.show()
         except Exception:
@@ -1582,16 +1602,11 @@ class MainWindow(QMainWindow):
         s = QFrame(); s.setObjectName("sidebar"); s.setFixedWidth(224)
         v = QVBoxLayout(s); v.setContentsMargins(16, 20, 16, 16); v.setSpacing(6)
         head = QHBoxLayout()
-        logo = QLabel(); pm = QPixmap(34, 34); pm.fill(Qt.transparent)
-        p = QPainter(pm); p.setRenderHint(QPainter.Antialiasing); p.setPen(Qt.NoPen)
-        p.setBrush(QColor(T.ACCENT)); p.drawRoundedRect(0, 0, 34, 34, 9, 9)
-        p.setPen(QColor("white")); f = QFont(T.FONT, 15); f.setBold(True); p.setFont(f)
-        p.drawText(pm.rect(), Qt.AlignCenter, "₹"); p.end()
-        logo.setPixmap(pm)
+        logo = QLabel(); logo.setPixmap(_app_pixmap(34))
         head.addWidget(logo)
         tt = QVBoxLayout(); tt.setSpacing(0)
-        tt.addWidget(lbl("Money Tracker", bold=True, size=12))
-        tt.addWidget(lbl("PyQt edition", color=T.MUTED, size=8))
+        tt.addWidget(lbl("WhoAteMySalary", bold=True, size=11))
+        tt.addWidget(lbl("where'd it go?", color=T.MUTED, size=8))
         head.addLayout(tt); head.addStretch(1)
         v.addLayout(head)
         v.addSpacing(12)
@@ -1738,24 +1753,24 @@ class MainWindow(QMainWindow):
         self.session_new_ids.add(p["id"])
         auto = p.get("auto")
         sign = "+" if p["dir"] == "IN" else "-"
-        title = f"{sign} Rs {T.inr(p['amount'])}  -  {p['bank']}"
-        msg = (f"{p['merchant']}  ->  {p['cat']}"
-               + ("  (auto-filed)" if auto else "  (click to review)"))
+        quip = goblin.found()                       # e.g. "🧌 The Money Goblin sniffed out…"
+        facts = f"{sign} Rs {T.inr(p['amount'])}  ·  {p['merchant']}  ->  {p['cat']}"
         if config.load().get("notifications", True):
-            # real Windows toast; clicking it opens the Review page
+            # real Windows toast; the Money Goblin's line leads, the facts follow.
             fired = False
             try:
-                fired = notify.notify(title, msg, on_click=self.notifClicked.emit)
+                fired = notify.notify(quip, facts, on_click=self.notifClicked.emit)
             except Exception:
                 fired = False
             if not fired:
                 try:
-                    self.tray.showMessage(title, msg, QSystemTrayIcon.Information, 6000)
+                    self.tray.showMessage(quip, facts, QSystemTrayIcon.Information, 6000)
                 except Exception:
                     pass
         # in-app slide-in toast (also opens Review on click)
         self.toast(f"{sign} ₹{T.inr(p['amount'])}  ·  {p['bank']}",
-                   f"{p['merchant']}  →  {p['cat']}" + ("  (auto-filed)" if auto else ""),
+                   f"{quip}\n{p['merchant']}  →  {p['cat']}"
+                   + ("  (auto-filed)" if auto else "  · tap to review"),
                    "in" if p["dir"] == "IN" else "out",
                    on_click=self._focus_review)
         # if a transaction that still needs review arrives while the dashboard is
@@ -1768,8 +1783,8 @@ class MainWindow(QMainWindow):
     def send_test_notification(self):
         """Fire a sample notification through the real path — no payment needed."""
         self._log_line("Sending a test system notification…")
-        title = "- Rs 199  -  CRED   (TEST)"
-        msg = "TEST - Coffee Shop  ->  Food & dining"
+        title = goblin.found()
+        msg = "- Rs 199  ·  Coffee Shop  ->  Food & dining  (test)"
         ok = False
         try:
             ok = notify.notify(title, msg)
@@ -1777,7 +1792,7 @@ class MainWindow(QMainWindow):
             self._log_line(f"Test notification error: {e}")
         if not ok:
             try:
-                self.tray.showMessage("Mail Money Tracker (test)", msg,
+                self.tray.showMessage("WhoAteMySalary (test)", msg,
                                       QSystemTrayIcon.Information, 6000)
                 ok = True
             except Exception:

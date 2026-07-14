@@ -177,11 +177,11 @@ class _CatchHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         msg = ("Signed in successfully. You can close this tab and return to "
-               "Mail Money Tracker.") if ok else \
+               "WhoAteMySalary.") if ok else \
               "Sign-in failed or was cancelled. You can close this tab."
         self.wfile.write((
             "<!doctype html><meta charset='utf-8'>"
-            "<title>Mail Money Tracker</title>"
+            "<title>WhoAteMySalary</title>"
             "<div style='font-family:Segoe UI,Arial,sans-serif;max-width:520px;"
             "margin:80px auto;text-align:center'>"
             "<div style='font-size:44px'>%s</div>"

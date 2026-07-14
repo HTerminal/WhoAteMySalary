@@ -9,8 +9,8 @@ Fallbacks: winotify -> plyer -> console.
 
 Registers an AppUserModelID (AUMID) under HKCU (per-user, no admin, no shortcut)
 so Windows shows the app name/icon and keeps the toast in the panel."""
-APP_ID = "MailMoneyTracker.Desktop"     # must match the registered AUMID exactly
-APP_NAME = "Mail Money Tracker"
+APP_ID = "WhoAteMySalary.Desktop"     # must match the registered AUMID exactly
+APP_NAME = "WhoAteMySalary"
 
 
 def _register_aumid():
