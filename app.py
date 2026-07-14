@@ -16,14 +16,16 @@ for _s in (sys.stdout, sys.stderr):
 from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-from PyQt5.QtCore import Qt, QDate, QTimer, QPropertyAnimation, QAbstractAnimation, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QIcon, QPixmap, QPainter, QTextCharFormat
+from PyQt5.QtCore import (Qt, QDate, QTimer, QPropertyAnimation, QAbstractAnimation,
+                          pyqtSignal, QRectF)
+from PyQt5.QtGui import (QColor, QFont, QIcon, QPixmap, QPainter, QTextCharFormat,
+                         QPainterPath, QLinearGradient, QBrush, QPen)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QStackedWidget, QScrollArea, QComboBox, QLineEdit,
     QDateEdit, QCheckBox, QSpinBox, QPlainTextEdit, QTableWidget, QHeaderView,
     QAbstractItemView, QTreeWidget, QTreeWidgetItem, QDialog, QMessageBox,
-    QButtonGroup, QSystemTrayIcon, QGraphicsOpacityEffect, QSizePolicy)
+    QButtonGroup, QSystemTrayIcon, QGraphicsOpacityEffect, QSizePolicy, QSplashScreen)
 
 import theme as T
 import engine
@@ -172,6 +174,81 @@ def _app_pixmap(size):
 
 def make_icon():
     return QIcon(_app_pixmap(256))
+
+
+# =================================================== splash / loading screen
+def make_splash_pixmap(w=520, h=300):
+    """The startup card: logo, name, tagline. The status line and loading bar are
+    painted on top by Splash.drawContents()."""
+    pm = QPixmap(w, h)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+    card = QPainterPath()
+    card.addRoundedRect(QRectF(0, 0, w, h), 18, 18)
+    g = QLinearGradient(0, 0, w, h)
+    g.setColorAt(0.0, QColor("#182034")); g.setColorAt(1.0, QColor(T.BG))
+    p.fillPath(card, QBrush(g))
+    p.setBrush(Qt.NoBrush); p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+    p.drawPath(card)
+
+    icon = _app_pixmap(88)
+    p.drawPixmap(int((w - 88) / 2), 40, icon)
+
+    p.setPen(QColor(T.TEXT))
+    f = QFont(T.FONT, 19); f.setBold(True); p.setFont(f)
+    p.drawText(QRectF(0, 140, w, 34), Qt.AlignCenter, "WhoAteMySalary")
+
+    p.setPen(QColor(T.MUTED))
+    f2 = QFont(T.FONT, 10); p.setFont(f2)
+    p.drawText(QRectF(0, 174, w, 20), Qt.AlignCenter, "where'd it go?")
+    p.end()
+    return pm
+
+
+class Splash(QSplashScreen):
+    """A proper startup splash: shows the logo while the app boots, with a status
+    line and an indeterminate progress bar so it never looks frozen."""
+
+    def __init__(self):
+        super().__init__(make_splash_pixmap())
+        self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint |
+                            Qt.WindowStaysOnTopHint)
+        self._phase = 0.0
+        self._msg = "Starting up…"
+
+    def note(self, text):
+        self._msg = text
+        self.repaint()
+        QApplication.processEvents()
+
+    def tick(self, dt=0.03):
+        self._phase = (self._phase + dt * 0.75) % 1.0
+        self.repaint()
+        QApplication.processEvents()
+
+    def drawContents(self, p):
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+
+        p.setPen(QColor(T.TEXT2))
+        f = QFont(T.FONT, 9); p.setFont(f)
+        p.drawText(QRectF(0, h - 78, w, 20), Qt.AlignCenter, self._msg)
+
+        bw, bh = 300.0, 4.0
+        bx, by = (w - bw) / 2.0, h - 48.0
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 28))
+        p.drawRoundedRect(QRectF(bx, by, bw, bh), 2, 2)
+
+        seg = 96.0                       # the sliding highlight
+        x = bx + (bw + seg) * self._phase - seg
+        x0, x1 = max(bx, x), min(bx + bw, x + seg)
+        if x1 > x0:
+            p.setBrush(QColor(T.ACCENT))
+            p.drawRoundedRect(QRectF(x0, by, x1 - x0, bh), 2, 2)
 
 
 class TreeItem(QTreeWidgetItem):
@@ -1864,7 +1941,23 @@ def main():
     app.setStyle("Fusion")
     app.setFont(QFont(T.FONT, 10))
     app.setStyleSheet(T.QSS.replace("__CARET__", _make_caret()))
-    win = MainWindow()
+    app.setWindowIcon(make_icon())
+
+    splash = Splash()
+    splash.show()
+    splash.note("Starting up…")
+
+    t0 = time.time()
+    splash.note("Opening your ledger…")
+    win = MainWindow()                       # engine.init(): DB, config, migrations
+    splash.note("Waking the Money Goblin…")
+
+    # Keep the logo up briefly so it reads as a splash instead of a flash.
+    while time.time() - t0 < 1.3:
+        splash.tick()
+        time.sleep(0.02)
+
+    splash.finish(win)
     win.show()
     sys.exit(app.exec_())
 

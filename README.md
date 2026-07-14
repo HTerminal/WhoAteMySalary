@@ -75,6 +75,12 @@ of your data.
 
 ## Screenshots
 
+**Startup** — a splash screen while the app boots:
+
+<p align="center">
+  <img src="docs/screenshots/splash.png" width="420" alt="WhoAteMySalary splash screen">
+</p>
+
 **Review queue** — verify and categorise each new transaction as it arrives:
 
 ![Review queue](docs/screenshots/review.png)

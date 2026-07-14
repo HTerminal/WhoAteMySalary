@@ -155,5 +155,16 @@ snap("Transactions", "transactions.png")
 snap("Parser", "parser.png")
 snap("Settings", "settings.png")
 
+# the startup splash — a standalone widget, not one of the pages
+sp = A.Splash()
+sp.setAttribute(Qt.WA_DontShowOnScreen, True)
+sp.show()
+sp._msg = "Waking the Money Goblin…"
+sp._phase = 0.42                      # mid-sweep of the loading bar
+settle(150); sp.repaint(); settle(80)
+sp.grab().save(os.path.join(OUT, "splash.png"))
+sp.close()
+print("saved docs\\screenshots\\splash.png")
+
 win.poller.wait(1500)
 print("done ->", OUT)

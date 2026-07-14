@@ -5,6 +5,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-14
+### Added
+- **Startup splash screen** — on launch the app now shows a proper loading card
+  (the bitten-₹ logo, the app name, a status line and an indeterminate progress
+  bar) while the database, config and migrations initialise, so it never looks
+  frozen on a cold start. Rendered by `Splash` in `app.py`; reproducible via
+  `tools/make_icon.py` + `tools/gen_screenshots.py`.
+
 ## [1.1.0] - 2026-07-14
 ### Added
 - **Sign in with Google (OAuth2)** — a browser-based login that stores no
