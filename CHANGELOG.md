@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 - **Renamed the project to WhoAteMySalary** (window title, notifications/AppUserModelID,
-  PyInstaller spec, docs, and the suggested repo name `who-ate-my-salary`).
+  PyInstaller spec, docs, and the repo name `WhoAteMySalary`).
 - README now labels sign-in methods by test status: the **Gmail app password** is tested and
   working; **Google** and **Microsoft** OAuth2 are implemented but not yet verified end-to-end.
 

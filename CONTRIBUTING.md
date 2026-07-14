@@ -11,9 +11,6 @@ The project is intentionally **close to the standard library plus PyQt5**. That
 constraint is a feature: it keeps the app easy to build, audit, and package.
 Please keep it that way (see [Coding style](#coding-style)).
 
-> Replace `OWNER/REPO` throughout with the real GitHub path once the repo is
-> published. The suggested repository name is **`who-ate-my-salary`**.
-
 ---
 
 ## Table of contents
@@ -40,8 +37,8 @@ You need **Python 3.12** and **git**. PyQt5 currently has no wheels for Python
 
 ```bash
 # 1. Clone
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/hterminal/WhoAteMySalary.git
+cd WhoAteMySalary
 
 # 2. (Recommended) create a virtual environment
 py -3.12 -m venv .venv
@@ -272,7 +269,7 @@ config examples, or screenshots. Use obvious fakes like `you@example.com`.
    the **Parser** page to verify any parsing change against a redacted sample.
 4. Update `CHANGELOG.md` under `[Unreleased]` if the change is user-visible.
 5. Run `git status` and confirm **no personal data files** are staged.
-6. Open a PR against `OWNER/REPO`. Describe *what* changed and *why*, list how
+6. Open a PR against `hterminal/WhoAteMySalary`. Describe *what* changed and *why*, list how
    you tested it, and attach a screenshot for UI changes (use demo data only).
 7. Be responsive to review. Small, well-scoped PRs merge fastest.
 

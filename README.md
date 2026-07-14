@@ -10,7 +10,7 @@ transaction-alert emails you already get. Free, and all you need is one Gmail.**
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/downloads/release/python-3120/)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](#download--install)
-[![Download](https://img.shields.io/badge/Download-Releases-brightgreen.svg)](https://github.com/OWNER/REPO/releases)
+[![Download](https://img.shields.io/badge/Download-Releases-brightgreen.svg)](https://github.com/hterminal/WhoAteMySalary/releases)
 
 WhoAteMySalary is a native **PyQt5** desktop app. It connects to your Gmail or Outlook
 over **read-only IMAP**, finds the "you spent ₹…" / "you received ₹…" alert emails your banks
@@ -18,9 +18,6 @@ already send you, parses out the amount, direction and merchant, pops a Windows 
 notification, and lets you categorise and analyse where your money goes. It's **free**, works
 with **just one Gmail account**, and everything stays **on your machine** — you stay in control
 of your data.
-
-> Replace `OWNER/REPO` in the links above with your actual GitHub repository
-> (suggested name: **`who-ate-my-salary`**).
 
 ## Why you'll like it
 
@@ -100,7 +97,7 @@ alert email and watch the 4-step pipeline explain its decision.
 ## Download & Install
 
 Grab the latest build for your OS from the
-[**Releases**](https://github.com/OWNER/REPO/releases) page.
+[**Releases**](https://github.com/hterminal/WhoAteMySalary/releases) page.
 
 Each release attaches a ready-to-run bundle per OS (built automatically by CI — see
 [Building releases](#building-releases)).
@@ -129,8 +126,8 @@ Requires **Python 3.12** (PyQt5 has no wheels for the 3.15 alpha).
 
 ```bash
 # clone your repo
-git clone https://github.com/OWNER/REPO.git
-cd REPO
+git clone https://github.com/hterminal/WhoAteMySalary.git
+cd WhoAteMySalary
 
 # install dependencies
 py -3.12 -m pip install -r requirements.txt
@@ -328,7 +325,7 @@ own client in Settings. Google uses a **Desktop app** client (ID + secret); Micr
 ## Building releases
 
 Packaged builds are produced by the project's CI (GitHub Actions release workflow) and
-published to the [Releases](https://github.com/OWNER/REPO/releases) page. If you're setting
+published to the [Releases](https://github.com/hterminal/WhoAteMySalary/releases) page. If you're setting
 up your own fork's build pipeline — including how the `MMT_*` OAuth secrets are wired in —
 see [CONTRIBUTING.md](CONTRIBUTING.md).
 
