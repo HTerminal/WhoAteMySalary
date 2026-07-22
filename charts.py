@@ -5,10 +5,56 @@ import math
 from PyQt5.QtWidgets import QWidget, QFrame, QLabel, QVBoxLayout, QTableWidgetItem
 from PyQt5.QtCore import (Qt, QRectF, pyqtSignal, pyqtProperty, QPropertyAnimation,
                           QVariantAnimation, QEasingCurve, QAbstractAnimation)
-from PyQt5.QtGui import QPainter, QColor, QPen, QFont
+from PyQt5.QtGui import QPainter, QColor, QPen, QFont, QImage
 import theme as T
 
 ANIM = True          # global switch (set from config at startup)
+
+
+def render_donut(data, px=900, center_top="", center_big="",
+                 bg="#ffffff", ink="#111111", muted="#666666"):
+    """The dashboard's spending donut, painted onto a light QImage for the PDF
+    report. Rendered oversized and scaled down in the document so it stays crisp
+    in print. `data` is the (label, value, colour) list build_dashboard returns."""
+    img = QImage(px, px, QImage.Format_ARGB32)
+    img.fill(QColor(bg))
+    p = QPainter(img)
+    p.setRenderHint(QPainter.Antialiasing)
+    d = px * 0.94
+    c = px / 2
+    rect = QRectF(c - d / 2, c - d / 2, d, d)
+    data = [(l, v, col) for (l, v, col) in data if v > 0]
+    if not data:
+        p.setPen(Qt.NoPen); p.setBrush(QColor("#eef1f7")); p.drawEllipse(rect)
+        p.setPen(QColor(muted)); p.setFont(QFont(T.FONT, int(px / 22)))
+        p.drawText(rect, Qt.AlignCenter, "no spending")
+        p.end()
+        return img
+
+    total = sum(v for _, v, _ in data) or 1
+    cum = 0.0
+    for _label, val, color in data:
+        span = val / total * 360
+        p.setBrush(QColor(color))
+        p.setPen(QPen(QColor(bg), max(2.0, px / 260)))     # thin gap between slices
+        p.drawPie(rect, round((90 - cum) * 16), round(-span * 16))
+        cum += span
+
+    ir = d * 0.62 / 2                                       # punch the hole
+    p.setBrush(QColor(bg)); p.setPen(Qt.NoPen)
+    p.drawEllipse(QRectF(c - ir, c - ir, 2 * ir, 2 * ir))
+
+    if center_top:
+        p.setPen(QColor(muted)); p.setFont(QFont(T.FONT, int(px / 30)))
+        p.drawText(QRectF(c - ir, c - px * 0.09, 2 * ir, px * 0.07),
+                   Qt.AlignCenter, center_top)
+    if center_big:
+        f = QFont(T.FONT, int(px / 18)); f.setBold(True)
+        p.setFont(f); p.setPen(QColor(ink))
+        p.drawText(QRectF(c - ir, c - px * 0.035, 2 * ir, px * 0.09),
+                   Qt.AlignCenter, center_big)
+    p.end()
+    return img
 
 
 class NumItem(QTableWidgetItem):

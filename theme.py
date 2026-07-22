@@ -123,6 +123,20 @@ def inr(n):
     return ("-" if neg else "") + whole
 
 
+def inr2(n):
+    """Indian-grouped amount keeping paise — '-1,60,306.75'. For statements, where
+    inr()'s rounding to whole rupees would stop the column adding up."""
+    n = round(float(n), 2)
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    whole = int(n)
+    paise = int(round((n - whole) * 100))
+    if paise == 100:                       # 999.999 -> 1000.00, not 999.100
+        whole += 1
+        paise = 0
+    return f"{sign}{inr(whole)}.{paise:02d}"
+
+
 def lakh(n):
     n = float(n)
     if abs(n) >= 1e7:

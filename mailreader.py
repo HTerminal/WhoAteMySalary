@@ -189,6 +189,24 @@ def _card(subject, body):
     return m.group(1).upper().replace(" ", "").replace("*", "X") if m else ""
 
 
+_REF_RE = re.compile(
+    r'\b(?:UPI\s*)?(?:Ref(?:erence)?|RRN|UTR|Txn|Transaction)\s*'
+    r'(?:No\.?|Number|ID)?\s*[:.\-#=]?\s*'
+    r'([0-9]{8,22}|[A-Z]{2,6}[0-9]{6,18})\b', re.I)
+
+
+def _ref(subject, body):
+    """The bank's reference / RRN / UTR for this transaction, when the alert quotes
+    one. Canara's newer card alerts carry a 12-digit 'Ref.'; ICICI, SBI and PNB
+    send none, so this is empty for them."""
+    for m in _REF_RE.finditer(f"{subject} {body}"):
+        v = m.group(1).upper()
+        if v.isdigit() and len(v) == 8 and v[:2] in ("19", "20"):
+            continue                       # a yyyymmdd date, not a reference
+        return v
+    return ""
+
+
 def matching_source(cfg, from_addr, subject):
     """Which configured source matched this email (for tagging). Returns the
     source name, or '(catch-all)' if it only passed via the global toggle."""
@@ -247,6 +265,7 @@ def parse_email(subject, body, from_addr):
         "direction": direction,
         "merchant": merchant,
         "card": _card(subject, body),
+        "ref": _ref(subject, body),
         "bank": _bank(f"{from_addr} {subject} {body[:200]}"),
     }
 
@@ -333,7 +352,7 @@ def parse_debug(subject, body, from_addr):
     blob = f"{subject}\n{body}"
     low = blob.lower()
     out = {"amount": None, "currency": None, "direction": None, "merchant": None,
-           "card": None, "amount_rule": None, "merchant_rule": None,
+           "card": None, "ref": None, "amount_rule": None, "merchant_rule": None,
            "is_txn": False, "why": ""}
     # amount + which rule
     for name, rx in (("transaction-phrase", _TXN_AMT_RE), ("debit/credit-verb", _VERB_AMT_RE)):
@@ -367,6 +386,7 @@ def parse_debug(subject, body, from_addr):
         out["merchant"] = _merchant(body, subject)
         out["merchant_rule"] = "fallback: cleaned subject"
     out["card"] = _card(subject, body)
+    out["ref"] = _ref(subject, body)
     if out["amount"] and (is_in or is_out):
         out["is_txn"] = True
     else:

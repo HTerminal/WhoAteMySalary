@@ -46,7 +46,7 @@ def init():
     """)
     # migrate older DBs that lack the date columns
     cols = {r["name"] for r in c.execute("PRAGMA table_info(txns)")}
-    for col in ("tdate", "month", "source", "card"):
+    for col in ("tdate", "month", "source", "card", "ref"):
         if col not in cols:
             c.execute(f"ALTER TABLE txns ADD COLUMN {col} TEXT")
     if "seq" not in cols:
@@ -89,13 +89,13 @@ def add_txn(t, status="pending", seq=None):
         cur = c.execute("""INSERT INTO txns
             (account,uid,seq,bank,amount,direction,merchant,subject,from_addr,
              email_date,tdate,month,received_at,guessed_category,category,note,
-             source,card,status)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+             source,card,ref,status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (t["account"], t["uid"], int(seq), t.get("bank",""), t["amount"], t["direction"],
              t.get("merchant",""), t.get("subject",""), t.get("from_addr",""),
              t.get("email_date",""), tdate, month, time.time(),
              t.get("guessed_category",""), t.get("guessed_category",""), "",
-             t.get("source",""), t.get("card",""), status))
+             t.get("source",""), t.get("card",""), t.get("ref",""), status))
         c.commit()
         return cur.lastrowid
     except sqlite3.IntegrityError:
@@ -116,16 +116,40 @@ def recent(limit=100):
         "SELECT * FROM txns ORDER BY tdate DESC, received_at DESC LIMIT ?", (limit,)).fetchall()
 
 
-def rows_filtered(start=None, end=None):
-    """Rows with tdate between start..end (ISO 'YYYY-MM-DD'); non-ignored only."""
+def card_last4(card):
+    """Last 4 digits of a masked card number. Banks mask the same card different
+    ways ('XX1009' vs 'XXXXXXXXXXXX1009'), so the digits are the only stable key."""
+    d = re.sub(r"\D", "", card or "")
+    return d[-4:] if d else ""
+
+
+def rows_filtered(start=None, end=None, bank=None, card=None, source=None):
+    """Rows with tdate between start..end (ISO 'YYYY-MM-DD'); non-ignored only.
+    bank/source match exactly; card matches on its last 4 digits so every masking
+    of the same card is included."""
     q = "SELECT * FROM txns WHERE status!='ignored'"
     args = []
     if start:
         q += " AND tdate>=? AND tdate!=''"; args.append(start)
     if end:
         q += " AND tdate<=? AND tdate!=''"; args.append(end)
+    if bank:
+        q += " AND bank=?"; args.append(bank)
+    if source:
+        q += " AND source=?"; args.append(source)
+    last4 = card_last4(card)
+    if last4:
+        q += " AND card LIKE ?"; args.append("%" + last4)
     q += " ORDER BY tdate DESC, amount DESC"
     return conn().execute(q, args).fetchall()
+
+
+def scope_rows():
+    """Every (bank, source, card) combination seen, with its count — feeds the
+    dashboard's bank / card / filter pickers."""
+    return conn().execute(
+        "SELECT bank, source, card, COUNT(*) n FROM txns WHERE status!='ignored' "
+        "GROUP BY bank, source, card").fetchall()
 
 
 def get(id):

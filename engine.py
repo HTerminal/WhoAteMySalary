@@ -29,7 +29,34 @@ def init():
                 print(f"[init] reclassified {moved} credit-card bill payment(s).")
         except Exception as e:
             print("[init] cc reclassify skipped:", e)
+    # one-time: recover reference numbers for transactions stored before we parsed them
+    if db.get_meta("refs_backfilled_v1") != "1":
+        try:
+            found = backfill_refs()
+            db.set_meta("refs_backfilled_v1", "1")
+            if found:
+                print(f"[init] recovered {found} reference number(s) from cached emails.")
+        except Exception as e:
+            print("[init] ref backfill skipped:", e)
     return cfg
+
+
+def backfill_refs():
+    """One-time: recover each transaction's bank reference number by re-reading its
+    cached email. Only fills blanks, so it's safe to re-run."""
+    c = db.conn()
+    rows = c.execute("SELECT id, account, uid FROM txns WHERE ref IS NULL OR ref=''").fetchall()
+    n = 0
+    for r in rows:
+        em = cache.get(r["account"], r["uid"])
+        if not em:
+            continue                       # email no longer cached — nothing to recover
+        ref = mailreader._ref(em.get("subject") or "", em.get("body") or "")
+        if ref:
+            c.execute("UPDATE txns SET ref=? WHERE id=?", (ref, r["id"]))
+            n += 1
+    c.commit()
+    return n
 
 
 def _d(r):
@@ -45,6 +72,7 @@ def mlabel(ym):
 
 
 _merch_key = db.merch_key          # canonical normalisation lives in db
+card_last4 = db.card_last4
 
 
 def counts():
@@ -55,9 +83,44 @@ def total_stored():
     return db.total_txns()
 
 
-def build_dashboard(start=None, end=None):
-    rows = [_d(r) for r in db.rows_filtered(start, end)]
+def filter_options():
+    """Choices for the dashboard's scope pickers: banks, cards (collapsed to their
+    last 4 digits) and sources — a.k.a. "filters". Each card/source carries the bank
+    it belongs to so the pickers can narrow one another."""
+    banks, sources, cards = {}, {}, {}
+    for r in db.scope_rows():
+        bank = (r["bank"] or "").strip()
+        src = (r["source"] or "").strip()
+        n = r["n"]
+        if bank:
+            banks[bank] = banks.get(bank, 0) + n
+        if src:
+            s = sources.setdefault(src, {"n": 0, "bank": bank})
+            s["n"] += n
+            s["bank"] = s["bank"] or bank
+        last4 = db.card_last4(r["card"])
+        if last4:
+            c = cards.setdefault(last4, {"n": 0, "bank": bank, "sources": set()})
+            c["n"] += n
+            c["bank"] = c["bank"] or bank
+            if src:
+                c["sources"].add(src)
+
+    def _big_first(d):
+        return sorted(d.items(), key=lambda kv: -kv[1]["n"])
+
+    return dict(
+        banks=[{"value": b, "n": n} for b, n in sorted(banks.items(), key=lambda kv: -kv[1])],
+        cards=[{"value": k, "n": v["n"], "bank": v["bank"], "sources": sorted(v["sources"])}
+               for k, v in _big_first(cards)],
+        sources=[{"value": s, "n": v["n"], "bank": v["bank"]} for s, v in _big_first(sources)],
+    )
+
+
+def build_dashboard(start=None, end=None, bank=None, card=None, source=None):
+    rows = [_d(r) for r in db.rows_filtered(start, end, bank, card, source)]
     spend = defaultdict(float); income = defaultdict(float)
+    spend_n = defaultdict(int); income_n = defaultdict(int)
     m_in = defaultdict(float); m_out = defaultdict(float)
     tin = tout = 0.0
     cc_bills = 0.0; cc_n = 0
@@ -72,11 +135,11 @@ def build_dashboard(start=None, end=None):
             cc_bills += amt; cc_n += 1
             continue
         if r["direction"] == "OUT":
-            spend[cat] += amt; m_out[m] += amt; tout += amt
+            spend[cat] += amt; spend_n[cat] += 1; m_out[m] += amt; tout += amt
             if amt > 1000:
                 large.append(r)
         else:
-            income[cat] += amt; m_in[m] += amt; tin += amt
+            income[cat] += amt; income_n[cat] += 1; m_in[m] += amt; tin += amt
 
     months = sorted(k for k in (set(m_in) | set(m_out)) if k and k != "unknown")
     sp = sorted(spend.items(), key=lambda x: -x[1])
@@ -112,17 +175,20 @@ def build_dashboard(start=None, end=None):
         rows_n=len(rows), tin=tin, tout=tout, net=tin - tout,
         cc_bills=cc_bills, cc_bills_n=cc_n,
         spend=spend_data, income=income_data,
+        spend_n=dict(spend_n), income_n=dict(income_n),
         months=months, m_in=dict(m_in), m_out=dict(m_out), mnames=mnames,
         large=sorted(large, key=lambda r: -r["amount"])[:80],
         merchants=merchants, all_rows=rows,
     )
 
 
-def txns_filtered(start=None, end=None, direction=None, category=None, bucket=None):
-    """Rows in the range. bucket: 'in' (money-in, excl. CC bills) | 'out' (money-out,
-    excl. CC bills) | 'cc' (credit-card bill payments only) | None (use direction/category)."""
+def txns_filtered(start=None, end=None, direction=None, category=None, bucket=None,
+                  bank=None, card=None, source=None):
+    """Rows in the range, optionally narrowed to one bank / card / source. bucket:
+    'in' (money-in, excl. CC bills) | 'out' (money-out, excl. CC bills) |
+    'cc' (credit-card bill payments only) | None (use direction/category)."""
     out = []
-    for r in db.rows_filtered(start, end):
+    for r in db.rows_filtered(start, end, bank, card, source):
         cat = r["category"] or r["guessed_category"] or "Uncategorised"
         is_cc = cat in CC_BILL_CATEGORIES
         if bucket == "cc":
@@ -140,6 +206,39 @@ def txns_filtered(start=None, end=None, direction=None, category=None, bucket=No
             if category and cat != category:
                 continue
         out.append(_d(r))
+    return out
+
+
+# ----- statement export (dashboard) -----
+# (key, label shown in the picker, sort key, reverse)
+STATEMENT_SORTS = [
+    ("date_asc",     "Date — oldest first",     lambda r: (r.get("tdate") or "", r.get("received_at") or 0), False),
+    ("date_desc",    "Date — newest first",     lambda r: (r.get("tdate") or "", r.get("received_at") or 0), True),
+    ("amount_desc",  "Amount — largest first",  lambda r: r.get("amount") or 0, True),
+    ("amount_asc",   "Amount — smallest first", lambda r: r.get("amount") or 0, False),
+    ("merchant",     "Description — A to Z",    lambda r: (r.get("merchant") or "").upper(), False),
+    ("category",     "Category — A to Z",       lambda r: (r.get("category") or r.get("guessed_category") or "").upper(), False),
+]
+
+
+def statement(start=None, end=None, bank=None, card=None, source=None, sort="date_asc"):
+    """The rows behind an export: the current dashboard scope, in the chosen order,
+    each carrying a running balance. Money in adds, money out subtracts — so the
+    balance column reads like a bank statement's, accumulated in the order shown."""
+    rows = txns_filtered(start, end, bank=bank, card=card, source=source)
+    _, _, keyfn, rev = next((s for s in STATEMENT_SORTS if s[0] == sort), STATEMENT_SORTS[0])
+    bal = 0.0
+    out = []
+    for r in sorted(rows, key=keyfn, reverse=rev):
+        signed = r["amount"] if r["direction"] == "IN" else -r["amount"]
+        bal += signed
+        out.append({
+            "date": r.get("tdate") or "", "datetime": r.get("email_date") or "",
+            "ref": r.get("ref") or "", "description": r.get("merchant") or "(unknown)",
+            "category": r.get("category") or r.get("guessed_category") or "",
+            "direction": r["direction"], "amount": signed, "balance": bal,
+            "bank": r.get("bank") or "", "card": r.get("card") or "", "id": r["id"],
+        })
     return out
 
 

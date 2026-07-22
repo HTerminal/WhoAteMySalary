@@ -7,7 +7,8 @@ native sortable tables, native calendar date-pickers, expandable merchant tree.
 
 Run:  py -3.12 app.py
 """
-import sys, os, csv, time
+import sys, os, csv, time, re
+from html import escape
 for _s in (sys.stdout, sys.stderr):
     try:
         _s.reconfigure(encoding="utf-8")
@@ -17,15 +18,16 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from PyQt5.QtCore import (Qt, QDate, QTimer, QPropertyAnimation, QAbstractAnimation,
-                          pyqtSignal, QRectF)
+                          pyqtSignal, QRectF, QObject, QEvent, QUrl)
 from PyQt5.QtGui import (QColor, QFont, QIcon, QPixmap, QPainter, QTextCharFormat,
-                         QPainterPath, QLinearGradient, QBrush, QPen)
+                         QPainterPath, QLinearGradient, QBrush, QPen, QTextDocument)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QStackedWidget, QScrollArea, QComboBox, QLineEdit,
     QDateEdit, QCheckBox, QSpinBox, QPlainTextEdit, QTableWidget, QHeaderView,
     QAbstractItemView, QTreeWidget, QTreeWidgetItem, QDialog, QMessageBox,
-    QButtonGroup, QSystemTrayIcon, QGraphicsOpacityEffect, QSizePolicy, QSplashScreen)
+    QButtonGroup, QSystemTrayIcon, QGraphicsOpacityEffect, QSizePolicy, QSplashScreen,
+    QFileDialog, QAbstractScrollArea)
 
 import theme as T
 import engine
@@ -38,6 +40,8 @@ import notify
 import oauth
 import goblin
 from categorize import EXPENSE_CATEGORIES, INCOME_CATEGORIES
+
+DONUT_RES = "wams://donut.png"      # in-document name for the report's donut image
 
 NAV = [
     ("Overview",     "◈", "Overview",     "Your spending at a glance"),
@@ -130,9 +134,46 @@ def dt_str(r):
     return r.get("tdate") or ed[:16] or "—"
 
 
+def _bank_card(r):
+    """'ICICI · ••••6004' — whichever of the two the transaction actually carries."""
+    bank = (r.get("bank") or r.get("source") or "").strip()
+    last4 = engine.card_last4(r.get("card"))
+    return "  ·  ".join(x for x in (bank, "••••" + last4 if last4 else "") if x) or "—"
+
+
+class _WheelGuard(QObject):
+    """Takes the wheel away from a picker that isn't focused. Date fields and combos
+    live inside the scrolling pages, and by default a wheel notch over one of them
+    silently changes its value while the user is only trying to scroll. The scroll
+    is handed to the page underneath so hovering a picker isn't a dead zone."""
+    def eventFilter(self, obj, ev):
+        if ev.type() != QEvent.Wheel or obj.hasFocus():
+            return False
+        page = obj.parentWidget()
+        while page is not None and not isinstance(page, QAbstractScrollArea):
+            page = page.parentWidget()
+        if page is not None:
+            QApplication.sendEvent(page.viewport(), ev)
+        return True
+
+
+_WHEEL_GUARD = None
+
+
+def no_wheel(w):
+    """Make w ignore stray scrolling. Click or tab into it and the wheel works again."""
+    global _WHEEL_GUARD
+    if _WHEEL_GUARD is None:
+        _WHEEL_GUARD = _WheelGuard()
+    w.setFocusPolicy(Qt.StrongFocus)        # wheel alone must not focus it either
+    w.installEventFilter(_WHEEL_GUARD)
+    return w
+
+
 def date_edit(iso=None):
     """A QDateEdit with a calendar popup that highlights TODAY."""
     de = QDateEdit()
+    no_wheel(de)
     de.setCalendarPopup(True)
     de.setDisplayFormat("yyyy-MM-dd")
     if iso:
@@ -271,7 +312,7 @@ class TreeItem(QTreeWidgetItem):
 
 
 def cat_combo(current=""):
-    cb = QComboBox()
+    cb = no_wheel(QComboBox())                 # Review scrolls — never re-tag by wheel
     cb.setEditable(True)                       # let users type / invent a category
     cb.setInsertPolicy(QComboBox.NoInsert)     # we persist new ones ourselves
     cb.addItems(EXPENSE_CATEGORIES)
@@ -393,8 +434,9 @@ class TxnDialog(QDialog):
         self.search.textChanged.connect(self._apply)
         srow.addWidget(self.search)
         v.addLayout(srow)
-        self.table = make_table(["Date & time", "Merchant", "Category", "Source", "Amount"], stretch=1)
+        self.table = make_table(["Date & time", "Merchant", "Category", "Bank / card", "Amount"], stretch=1)
         self.table.setColumnWidth(0, 158)
+        self.table.setColumnWidth(3, 150)
         self.table.doubleClicked.connect(self._dbl)
         v.addWidget(self.table, 1)
         v.addWidget(lbl("Click a column header to sort · double-click a row to tag", color=T.MUTED, size=9))
@@ -404,8 +446,11 @@ class TxnDialog(QDialog):
         self.search.setFocus()
 
     def reload(self):
+        # inherits the dashboard's bank / card / filter scope
         self._rows = engine.txns_filtered(self.win.rng_from, self.win.rng_to,
-                                          self.dir, self.cat, self.bucket)
+                                          self.dir, self.cat, self.bucket,
+                                          self.win.f_bank or None, self.win.f_card or None,
+                                          self.win.f_source or None)
         for r in self._rows:
             r["_dt"] = dt_str(r)
         self._apply()
@@ -428,7 +473,7 @@ class TxnDialog(QDialog):
             m = txt_item((r.get("merchant") or "")[:44]); m.setData(Qt.UserRole, r["id"])
             t.setItem(i, 1, m)
             t.setItem(i, 2, txt_item(r.get("category") or r.get("guessed_category") or "—"))
-            t.setItem(i, 3, txt_item(r.get("bank") or r.get("source") or ""))
+            t.setItem(i, 3, txt_item(_bank_card(r)))
             sign = "+" if r["direction"] == "IN" else "−"
             a = NumItem(sign + "₹" + T.inr(r["amount"]), r["amount"])
             a.setForeground(QColor(T.GREEN if r["direction"] == "IN" else T.TEXT))
@@ -437,7 +482,10 @@ class TxnDialog(QDialog):
         t.setSortingEnabled(True)
         t.sortItems(0, Qt.DescendingOrder)      # newest first
         total = sum(r["amount"] for r in rows)
-        self.sub.setText(f"{len(rows)} transaction(s)  ·  ₹{T.inr(total)}"
+        scope = self.win.scope_text()
+        self.sub.setText(f"{self.win.rng_from} → {self.win.rng_to}"
+                         + (f"  ·  {scope}" if scope else "")
+                         + f"  ·  {len(rows)} transaction(s)  ·  ₹{T.inr(total)}"
                          + (f"   (filtered from {len(self._rows)})" if q else ""))
 
     def _dbl(self, idx):
@@ -446,6 +494,268 @@ class TxnDialog(QDialog):
         r = next((x for x in self._rows if x["id"] == rid), None)
         if r:
             TagDialog(self.win, r, on_done=self.reload).exec_()
+
+
+class ExportDialog(QDialog):
+    """Statement export for whatever the dashboard is currently showing — the date
+    range and the bank / card / filter scope. Date · Reference · Description ·
+    Amount · Closing balance, ordered however you pick, as PDF or CSV."""
+
+    def __init__(self, win):
+        super().__init__(win)
+        self.win = win
+        self.rows = []
+        self.setWindowTitle("Export statement")
+        self.resize(900, 660)
+        v = QVBoxLayout(self); v.setContentsMargins(18, 16, 18, 16); v.setSpacing(8)
+        v.addWidget(lbl("Export statement", bold=True, size=14))
+        self.sub = lbl("", color=T.MUTED, size=10)
+        v.addWidget(self.sub)
+
+        row = QHBoxLayout()
+        row.addWidget(lbl("ORDER BY", color=T.MUTED, bold=True, size=9))
+        self.cb_sort = no_wheel(QComboBox())
+        self.cb_sort.setMinimumWidth(210)
+        for key, label, _f, _r in engine.STATEMENT_SORTS:
+            self.cb_sort.addItem(label, key)
+        self.cb_sort.currentIndexChanged.connect(self.reload)
+        row.addWidget(self.cb_sort)
+        row.addStretch(1)
+        row.addWidget(btn("Save PDF", self._pdf))
+        row.addWidget(btn("Save CSV", self._csv, "ghost"))
+        v.addLayout(row)
+
+        self.table = make_table(["Date", "Reference", "Description", "Amount",
+                                 "Closing balance"], stretch=2)
+        # the balance accumulates down the rows, so the order must stay as exported
+        self.table.setSortingEnabled(False)
+        self.table.setColumnWidth(0, 100)
+        self.table.setColumnWidth(1, 130)
+        self.table.setColumnWidth(3, 120)
+        self.table.setColumnWidth(4, 140)
+        v.addWidget(self.table, 1)
+        v.addWidget(lbl("Closing balance runs down the rows in the order shown — money in adds, "
+                        "money out subtracts. Re-order above and it re-accumulates.",
+                        color=T.MUTED, size=9))
+        rb = QHBoxLayout(); rb.addStretch(1); rb.addWidget(btn("Close", self.reject, "ghost"))
+        v.addLayout(rb)
+        self.reload()
+
+    # ---- data
+    def reload(self):
+        self.rows = engine.statement(self.win.rng_from, self.win.rng_to,
+                                     self.win.f_bank or None, self.win.f_card or None,
+                                     self.win.f_source or None,
+                                     sort=self.cb_sort.currentData())
+        closing = self.rows[-1]["balance"] if self.rows else 0.0
+        self.sub.setText(f"{self.win.rng_from} → {self.win.rng_to}  ·  "
+                         f"{self.win.scope_text() or 'every bank & card'}  ·  "
+                         f"{len(self.rows)} transaction(s)  ·  closing balance ₹{T.inr2(closing)}")
+        t = self.table
+        t.setRowCount(len(self.rows))
+        for i, r in enumerate(self.rows):
+            t.setItem(i, 0, txt_item(r["date"] or "—"))
+            t.setItem(i, 1, txt_item(r["ref"] or "—"))
+            t.setItem(i, 2, txt_item(r["description"][:70]))
+            for col, val in ((3, r["amount"]), (4, r["balance"])):
+                it = txt_item(T.inr2(val))
+                it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                it.setForeground(QColor(T.GREEN if val >= 0 else T.TEXT))
+                t.setItem(i, col, it)
+
+    def _default_name(self, ext):
+        bits = ["statement", self.win.rng_from, "to", self.win.rng_to]
+        for part in (self.win.f_bank, self.win.f_card, self.win.f_source):
+            if part:
+                bits.append(re.sub(r"[^A-Za-z0-9]+", "-", part).strip("-"))
+        return "_".join(b for b in bits if b) + "." + ext
+
+    def _ask_path(self, label, ext):
+        start = os.path.join(os.path.dirname(os.path.abspath(__file__)), self._default_name(ext))
+        path, _ = QFileDialog.getSaveFileName(self, f"Save {label}", start,
+                                              f"{label} files (*.{ext})")
+        if path and not path.lower().endswith("." + ext):
+            path += "." + ext
+        return path
+
+    def _saved(self, path):
+        QMessageBox.information(self, "Exported",
+                                f"{len(self.rows)} transaction(s) saved to:\n{path}")
+
+    # ---- writers
+    def _csv(self):
+        path = self._ask_path("CSV", "csv")
+        if not path:
+            return
+        try:
+            with open(path, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow(["Date", "Reference", "Description", "Amount", "Closing balance",
+                            "Category", "Direction", "Bank", "Card", "Date & time"])
+                for r in self.rows:
+                    w.writerow([r["date"], r["ref"], r["description"],
+                                f'{r["amount"]:.2f}', f'{r["balance"]:.2f}',
+                                r["category"], r["direction"], r["bank"], r["card"],
+                                r["datetime"]])
+            self._saved(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+
+    def _pdf(self):
+        path = self._ask_path("PDF", "pdf")
+        if not path:
+            return
+        try:
+            from PyQt5.QtPrintSupport import QPrinter
+        except ImportError:
+            QMessageBox.critical(self, "PDF unavailable",
+                                 "QtPrintSupport isn't installed, so PDF export can't run.\n"
+                                 "Save as CSV instead.")
+            return
+        try:
+            doc = QTextDocument()
+            d = self._summary()
+            donut = charts.render_donut(
+                d["spend"], px=900, center_top="spending",
+                center_big="Rs " + T.lakh(d["tout"]))
+            doc.addResource(QTextDocument.ImageResource, QUrl(DONUT_RES), donut)
+            doc.setHtml(self._html(d))
+            pr = QPrinter(QPrinter.HighResolution)
+            pr.setOutputFormat(QPrinter.PdfFormat)
+            pr.setOutputFileName(path)
+            pr.setPageSize(QPrinter.A4)
+            pr.setPageMargins(12, 12, 12, 14, QPrinter.Millimeter)
+            # no setPageSize() on the document — print_() paginates against the
+            # printer's page and scales for its DPI. Forcing the page to the
+            # high-resolution device rect lays every row onto one giant page.
+            doc.print_(pr)
+            self._saved(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Export failed", str(e))
+
+    def _summary(self):
+        """The same numbers the dashboard is showing, for the report's first page."""
+        return engine.build_dashboard(self.win.rng_from or None, self.win.rng_to or None,
+                                      self.win.f_bank or None, self.win.f_card or None,
+                                      self.win.f_source or None)
+
+    @staticmethod
+    def _kpi(label, value, color):
+        return (f'<td width="20%" align="center" style="background-color:#f6f8fc;">'
+                f'<font size="1" color="{color}"><b>{label.upper()}</b></font><br>'
+                f'<font size="5"><b>{value}</b></font></td>')
+
+    def _html(self, d):
+        """Printable report — light-on-white, this goes on paper not on the dark UI.
+        Page 1 summarises (totals, donut, category split); the ledger follows."""
+        e = escape
+        scope = e(self.win.scope_text()) if self.win.scope_text() else "All banks &amp; cards"
+        closing = self.rows[-1]["balance"] if self.rows else 0.0
+
+        kpis = "".join([
+            self._kpi("Money out", "Rs " + T.lakh(d["tout"]), "#c2410c"),
+            self._kpi("Card bills", "Rs " + T.lakh(d["cc_bills"]), "#7c3aed"),
+            self._kpi("Money in", "Rs " + T.lakh(d["tin"]), "#15803d"),
+            self._kpi("Net", "Rs " + T.lakh(d["net"]), "#1d4ed8"),
+            self._kpi("Transactions", f'{d["rows_n"]:,}', "#a16207"),
+        ])
+
+        # category split — the donut's legend, as a table
+        tout = d["tout"] or 1
+        cats = []
+        for cat, val, color in d["spend"]:
+            cats.append(
+                "<tr>"
+                f'<td width="3%" bgcolor="{color}" style="background-color:{color};">&nbsp;</td>'
+                f'<td>{e(cat[:34])}</td>'
+                f'<td align="right">{d["spend_n"].get(cat, 0):,}</td>'
+                f'<td align="right">{val / tout * 100:.1f}%</td>'
+                f'<td align="right"><b>{e(T.inr2(val))}</b></td>'
+                "</tr>")
+        if not cats:
+            cats.append('<tr><td colspan="5"><i>No spending in this period.</i></td></tr>')
+
+        # incoming, when there is any
+        income = ""
+        if d["income"]:
+            rows = "".join(
+                "<tr>"
+                f'<td width="6%" bgcolor="{color}" style="background-color:{color};">&nbsp;</td>'
+                f'<td>{e(cat[:24])}</td>'
+                f'<td align="right">{d["income_n"].get(cat, 0):,}</td>'
+                f'<td align="right"><b>{e(T.inr2(val))}</b></td>'
+                "</tr>" for cat, val, color in d["income"])
+            # sits under the donut: uses the dead space and keeps the heading with
+            # its table instead of orphaning it at a page foot
+            income = f"""
+<p style="margin:16px 0 4px 0; font-size:9.5pt;"><b>Incoming by source</b></p>
+<table width="100%" cellspacing="0" cellpadding="4" border="1"
+       style="border-collapse:collapse; font-size:8.5pt; border-color:#ccc;">
+<tr style="background-color:#eef1f7;"><td width="6%">&nbsp;</td><td><b>Source</b></td>
+  <td align="right"><b>Txns</b></td><td align="right" width="38%"><b>Total</b></td></tr>
+{rows}</table>"""
+
+        led = []
+        for i, r in enumerate(self.rows):
+            bg = ' bgcolor="#eef2f8"' if i % 2 else ''       # stripe long ledgers
+            amt = e(T.inr2(r["amount"]))
+            if r["amount"] > 0:                              # credits stand out
+                amt = f'<font color="#15803d"><b>+{amt}</b></font>'
+            led.append(
+                "<tr>"
+                f'<td{bg}>{e(r["date"] or "")}</td>'
+                f'<td{bg}>{e(r["ref"]) if r["ref"] else "&ndash;"}</td>'
+                f'<td{bg}>{e(r["description"][:70])}</td>'
+                f'<td{bg} align="right">{amt}</td>'
+                f'<td{bg} align="right">{e(T.inr2(r["balance"]))}</td>'
+                "</tr>")
+        ledger = "".join(led)
+
+        return f"""
+<html><body style="font-family:Segoe UI,Arial,sans-serif; color:#111;">
+
+<h2 style="margin:0 0 3px 0;">Spending report</h2>
+<p style="margin:0 0 12px 0; font-size:9pt; color:#555;">
+  {e(self.win.rng_from)} to {e(self.win.rng_to)} &nbsp;&middot;&nbsp; {scope}</p>
+
+<table width="100%" cellspacing="4" cellpadding="7" border="0">
+  <tr>{kpis}</tr>
+</table>
+
+<h3 style="margin:18px 0 4px 0; font-size:11pt;">Where the money went</h3>
+<table width="100%" cellspacing="0" cellpadding="0" border="0"><tr>
+  <td width="38%" valign="top" align="center">
+    <img src="{DONUT_RES}" width="215" height="215">
+    {income}
+  </td>
+  <td width="62%" valign="top">
+    <table width="100%" cellspacing="0" cellpadding="4" border="1"
+           style="border-collapse:collapse; font-size:8.5pt; border-color:#ccc;">
+    <tr style="background-color:#eef1f7;"><td width="3%">&nbsp;</td><td><b>Category</b></td>
+      <td align="right" width="14%"><b>Txns</b></td><td align="right" width="14%"><b>Share</b></td>
+      <td align="right" width="26%"><b>Total</b></td></tr>
+    {"".join(cats)}
+    </table>
+  </td>
+</tr></table>
+
+<h3 style="page-break-before:always; margin:0 0 3px 0; font-size:11pt;">Transactions</h3>
+<p style="margin:0 0 8px 0; font-size:8.5pt; color:#555;">
+  Ordered by {e(self.cb_sort.currentText())} &middot; {len(self.rows)} transaction(s) &middot;
+  <b>closing balance Rs {e(T.inr2(closing))}</b></p>
+<table width="100%" cellspacing="0" cellpadding="3" border="1"
+       style="border-collapse:collapse; font-size:8.5pt; border-color:#bbb;">
+<thead><tr style="background-color:#eef1f7; font-weight:bold;">
+  <td width="14%">Date</td><td width="16%">Reference</td><td>Description</td>
+  <td width="14%" align="right">Amount</td><td width="16%" align="right">Closing balance</td>
+</tr></thead>
+<tbody>{ledger}</tbody>
+</table>
+<p style="margin-top:10px; font-size:7.5pt; color:#777;">
+  Closing balance accumulates down the rows in the order shown: money in adds, money out
+  subtracts. Credit-card bill payments are counted in their own bucket, not as spending.
+  Generated by WhoAteMySalary from bank e-mail alerts &mdash; not a bank document.</p>
+</body></html>"""
 
 
 class SourceDialog(QDialog):
@@ -463,8 +773,8 @@ class SourceDialog(QDialog):
         self.e_name = QLineEdit(src.get("name", ""))
         self.e_from = QLineEdit(src.get("from_contains", ""))
         self.e_subj = QLineEdit(src.get("subject_contains", ""))
-        self.e_match = QComboBox(); self.e_match.addItems(["both", "from", "subject", "either"]); self.e_match.setCurrentText(m)
-        self.e_primary = QComboBox(); self.e_primary.addItems(["from", "subject"]); self.e_primary.setCurrentText(p)
+        self.e_match = no_wheel(QComboBox()); self.e_match.addItems(["both", "from", "subject", "either"]); self.e_match.setCurrentText(m)
+        self.e_primary = no_wheel(QComboBox()); self.e_primary.addItems(["from", "subject"]); self.e_primary.setCurrentText(p)
         v.addSpacing(4)
         for t, w in [("Name", self.e_name), ("From contains", self.e_from),
                      ("Subject contains", self.e_subj), ("Match", self.e_match),
@@ -567,6 +877,22 @@ class OverviewPage(Page):
         self.de_to.dateChanged.connect(self._apply)
         bh.addWidget(self.de_from); bh.addWidget(lbl("to", color=T.MUTED)); bh.addWidget(self.de_to)
         self.v.addWidget(bar)
+
+        # scope bar — narrow the whole dashboard to one bank / card / filter
+        scbar = card(); ph = QHBoxLayout(scbar); ph.setContentsMargins(14, 10, 14, 10); ph.setSpacing(8)
+        ph.addWidget(lbl("SHOW", color=T.MUTED, bold=True, size=9))
+        self.cb_bank = self._scope_combo("All banks")
+        self.cb_card = self._scope_combo("All cards")
+        self.cb_src = self._scope_combo("All filters")
+        for name, cb in (("Bank", self.cb_bank), ("Card", self.cb_card), ("Filter", self.cb_src)):
+            ph.addWidget(lbl(name, color=T.MUTED, size=9)); ph.addWidget(cb)
+        ph.addWidget(btn("Reset", self._scope_reset, "ghost"))
+        ph.addStretch(1)
+        self.scope_note = lbl("", color=T.MUTED, size=9)
+        ph.addWidget(self.scope_note)
+        ph.addWidget(btn("See these transactions", self._scope_txns))
+        ph.addWidget(btn("Export…", self._export, "ghost"))
+        self.v.addWidget(scbar)
 
         # global search across all transactions
         sbar = card(); sh = QHBoxLayout(sbar); sh.setContentsMargins(14, 8, 14, 8)
@@ -671,7 +997,7 @@ class OverviewPage(Page):
 
     def _set_dates(self, frm, to):
         for de, val in ((self.de_from, frm), (self.de_to, to)):
-            de.blockSignals(True); de.setDate(self._qd(val)); de.blockSignals(False)
+            self._set_one(de, self._qd(val))
 
     def _all(self):
         self.win.rng_from, self.win.rng_to = "2000-01-01", date.today().isoformat()
@@ -689,9 +1015,83 @@ class OverviewPage(Page):
         self._set_dates(self.win.rng_from, self.win.rng_to); self.refresh()
 
     def _apply(self):
-        self.win.rng_from = self.de_from.date().toString("yyyy-MM-dd")
-        self.win.rng_to = self.de_to.date().toString("yyyy-MM-dd")
+        frm, to = self.de_from.date(), self.de_to.date()
+        if frm > to:
+            # dragging one end past the other pushes the other along, rather than
+            # leaving an inverted range that silently matches nothing
+            if self.sender() is self.de_to:
+                self._set_one(self.de_from, to); frm = to
+            else:
+                self._set_one(self.de_to, frm); to = frm
+        self.win.rng_from = frm.toString("yyyy-MM-dd")
+        self.win.rng_to = to.toString("yyyy-MM-dd")
         self.refresh()
+
+    @staticmethod
+    def _set_one(de, qdate):
+        de.blockSignals(True); de.setDate(qdate); de.blockSignals(False)
+
+    # ---- scope (bank / card / filter)
+    def _scope_combo(self, all_label):
+        cb = no_wheel(QComboBox())
+        cb.setMinimumWidth(140)
+        cb.addItem(all_label, "")
+        cb.currentIndexChanged.connect(self._scope_changed)
+        return cb
+
+    @staticmethod
+    def _fill_combo(cb, all_label, items, current):
+        """Refill a picker, re-selecting `current` if it's still on offer.
+        Returns the value actually selected — '' when the old one is gone."""
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem(all_label, "")
+        for value, label in items:
+            cb.addItem(label, value)
+        i = cb.findData(current)
+        cb.setCurrentIndex(i if i >= 0 else 0)
+        cb.blockSignals(False)
+        return cb.currentData() or ""
+
+    def _load_scope(self):
+        """(Re)fill the pickers from what's actually in the DB. A chosen bank narrows
+        the card + filter lists, and a chosen filter narrows the cards, so the pickers
+        can never be combined into an empty selection."""
+        o = engine.filter_options()
+        # each picker is resolved before it narrows the next one, so a bank change
+        # that invalidates the filter can't leave the card list narrowed by it
+        bank = self.win.f_bank = self._fill_combo(
+            self.cb_bank, "All banks",
+            [(b["value"], f'{b["value"]}  ({b["n"]:,})') for b in o["banks"]], self.win.f_bank)
+        src = self.win.f_source = self._fill_combo(
+            self.cb_src, "All filters",
+            [(s["value"], f'{s["value"]}  ({s["n"]:,})') for s in o["sources"]
+             if not bank or s["bank"] == bank], self.win.f_source)
+        self.win.f_card = self._fill_combo(
+            self.cb_card, "All cards",
+            [(c["value"], "••••" + c["value"]
+              + (f'  ·  {c["bank"]}' if c["bank"] and not bank else "") + f'  ({c["n"]:,})')
+             for c in o["cards"]
+             if (not bank or c["bank"] == bank) and (not src or src in c["sources"])],
+            self.win.f_card)
+
+    def _scope_changed(self):
+        self.win.f_bank = self.cb_bank.currentData() or ""
+        self.win.f_card = self.cb_card.currentData() or ""
+        self.win.f_source = self.cb_src.currentData() or ""
+        self._load_scope()          # a new bank re-narrows the card / filter lists
+        self.refresh()
+
+    def _scope_reset(self):
+        self.win.f_bank = self.win.f_card = self.win.f_source = ""
+        self._load_scope()
+        self.refresh()
+
+    def _scope_txns(self):
+        self.win.open_txns(self.win.scope_text() or "All transactions")
+
+    def _export(self):
+        ExportDialog(self.win).exec_()
 
     def _do_search(self):
         self.win.open_txns("Search results", search=self.search.text().strip())
@@ -736,11 +1136,19 @@ class OverviewPage(Page):
     def on_show(self):
         if self.win.rng_from and self.win.rng_to:
             self._set_dates(self.win.rng_from, self.win.rng_to)
+        self._load_scope()
         self.refresh()
 
     def refresh(self):
-        d = engine.build_dashboard(self.win.rng_from or None, self.win.rng_to or None)
-        sig = (self.win.rng_from, self.win.rng_to, round(d["tout"]), round(d["tin"]),
+        d = engine.build_dashboard(self.win.rng_from or None, self.win.rng_to or None,
+                                   self.win.f_bank or None, self.win.f_card or None,
+                                   self.win.f_source or None)
+        scope = self.win.scope_text()
+        note = ("Showing " + scope) if scope else "Showing every bank & card"
+        if not d["rows_n"]:
+            note += "  —  nothing in this date range"
+        self.scope_note.setText(note)
+        sig = (self.win.rng_from, self.win.rng_to, scope, round(d["tout"]), round(d["tin"]),
                round(d["cc_bills"]), d["rows_n"], len(d["spend"]), len(d["merchants"]))
         anim = sig != self._sig
         self._sig = sig
@@ -1152,7 +1560,8 @@ class ParserPage(Page):
                 ("Amount rule", res.get("amount_rule") or "—"),
                 ("Direction", res.get("direction") or "—"),
                 ("Merchant", res.get("merchant") or "—"),
-                ("Card", res.get("card") or "—")]
+                ("Card", res.get("card") or "—"),
+                ("Reference", res.get("ref") or "— (this bank doesn't quote one)")]
         if not ok and res.get("why"):
             rows.append(("Why not", res["why"]))
         for k, val in rows:
@@ -1271,7 +1680,7 @@ class SettingsPage(Page):
         v.addWidget(lbl("Add a mailbox", bold=True, size=10))
         self.a_label = QLineEdit(); self.a_label.setPlaceholderText("e.g. Personal")
         self.a_email = QLineEdit(); self.a_email.setPlaceholderText("you@gmail.com / you@outlook.com")
-        self.a_method = QComboBox()
+        self.a_method = no_wheel(QComboBox())
         self.a_method.addItems(["Sign in with Google (OAuth2)",
                                 "Sign in with Microsoft / Outlook (OAuth2)",
                                 "App password (Gmail)"])
@@ -1449,8 +1858,8 @@ class SettingsPage(Page):
             v.addLayout(r)
         v.addSpacing(8)
         self.s_name = QLineEdit(); self.s_from = QLineEdit(); self.s_subj = QLineEdit()
-        self.s_match = QComboBox(); self.s_match.addItems(["both", "from", "subject", "either"])
-        self.s_primary = QComboBox(); self.s_primary.addItems(["from", "subject"])
+        self.s_match = no_wheel(QComboBox()); self.s_match.addItems(["both", "from", "subject", "either"])
+        self.s_primary = no_wheel(QComboBox()); self.s_primary.addItems(["from", "subject"])
         for t, w in [("Name", self.s_name), ("From contains", self.s_from),
                      ("Subject contains", self.s_subj), ("Match", self.s_match), ("Primary", self.s_primary)]:
             v.addLayout(_form_row(t, w))
@@ -1480,7 +1889,7 @@ class SettingsPage(Page):
         c = card(); v = QVBoxLayout(c); v.setContentsMargins(16, 14, 16, 14)
         v.addWidget(lbl("Preferences", bold=True, size=12))
         r1 = QHBoxLayout(); r1.addWidget(lbl("Check for new email every", color=T.TEXT2, size=9))
-        self.g_poll = QSpinBox(); self.g_poll.setRange(15, 86400); self.g_poll.setSuffix(" seconds")
+        self.g_poll = no_wheel(QSpinBox()); self.g_poll.setRange(15, 86400); self.g_poll.setSuffix(" seconds")
         self.g_poll.setValue(int(cfg.get("poll_interval_seconds", 60)))
         r1.addWidget(self.g_poll)
         for label_txt, secs in [("30s", 30), ("1 min", 60), ("2 min", 120), ("5 min", 300)]:
@@ -1490,7 +1899,7 @@ class SettingsPage(Page):
         v.addWidget(lbl("Lower = new transactions are caught faster (more frequent Gmail checks). "
                         "60 seconds = once a minute.", color=T.MUTED, size=8))
         r2 = QHBoxLayout(); r2.addWidget(lbl("Backfill days on first run", color=T.TEXT2, size=9))
-        self.g_back = QSpinBox(); self.g_back.setRange(0, 3650); self.g_back.setValue(int(cfg.get("backfill_days", 3)))
+        self.g_back = no_wheel(QSpinBox()); self.g_back.setRange(0, 3650); self.g_back.setValue(int(cfg.get("backfill_days", 3)))
         r2.addWidget(self.g_back); r2.addStretch(1); v.addLayout(r2)
         self.g_all = QCheckBox("Catch-all: track every email that mentions an amount")
         self.g_all.setChecked(cfg.get("track_all_amount_emails", False)); v.addWidget(self.g_all)
@@ -1631,6 +2040,9 @@ class MainWindow(QMainWindow):
         # default view = the last 2 days (user can widen it with the presets)
         self.rng_from = (today - timedelta(days=2)).isoformat()
         self.rng_to = today.isoformat()
+        # dashboard scope: "" = everything. Set from the Overview page's pickers and
+        # inherited by every drill-in dialog it opens.
+        self.f_bank = self.f_card = self.f_source = ""
         self.session_new_ids = set()
         self._toasts = []
         self._activity = []
@@ -1793,6 +2205,13 @@ class MainWindow(QMainWindow):
             cur.on_show()
         except Exception:
             pass
+
+    def scope_text(self):
+        """Human-readable summary of the active bank/card/filter scope ('' if none)."""
+        bits = [b for b in (self.f_bank,
+                            f"card ••••{self.f_card}" if self.f_card else "",
+                            f"filter “{self.f_source}”" if self.f_source else "") if b]
+        return "  ·  ".join(bits)
 
     # ---- dialogs
     def open_category(self, cat, direction):
