@@ -5,6 +5,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-08-09
+### Added
+- **"Category habits" panel on the Overview** (replaces the month-by-month
+  chart next to the donut): one row per spending category showing how many
+  times it was used in the selected period, its average uses per month, and
+  its quietest / busiest month by transaction count — e.g. Fuel: 9×, ~2.2/month,
+  quietest Aug 26 (1×), busiest Jun 26 (3×). Rows are colour-matched to the
+  donut, sortable, and double-click opens that category's transactions. For
+  "All time" the averages start at the first transaction, and single-month
+  ranges show "—" for quietest/busiest.
+- **Analytics view in every transaction drill-in** (category, KPI-card and
+  search dialogs): a 📊 Analytics button swaps the list for spending-rhythm
+  insights — total / count / average, **how often** you spend there (average
+  gap between purchase days), active days, extrapolated monthly pace, busiest
+  weekday, biggest transaction and top merchant, plus a spending-over-time
+  chart (day/week/month buckets picked from the range), a by-day-of-week chart
+  and a top-merchants chart (new `TimeBars` widget in `charts.py`). The search
+  box keeps filtering the analytics live; money-in lists analyse the incoming
+  side. **Clicking a bar** on the timeline or weekday chart pops up a small
+  frameless card next to the pointer with exactly that day/week/month's (or
+  weekday's) transactions: one payment shows its full details, several show
+  the bucket total plus a scrollable mini-list. ✕ or Esc dismisses it, and it
+  can be dragged around.
+- **"This month" period preset** on the Overview — filters from the 1st of the
+  current month through today, next to the other quick ranges.
+
+### Fixed
+- **The UI now adapts to the screen resolution and window size.** The Overview
+  toolbars (period presets, bank/card/filter scope) wrap onto extra rows instead
+  of getting cut off at the right edge on smaller displays; the KPI cards wrap
+  and the donut/month charts stack vertically when the window is narrow (via a
+  new `FlowLayout` in `app.py`). The main window now sizes itself to the
+  screen's available geometry instead of a fixed 1240×820 (minimum lowered from
+  1080×700), long Settings help texts word-wrap, and pages fall back to a
+  horizontal scrollbar rather than clipping content that still can't fit.
+
+## [1.3.0] - 2026-07-22
+### Added
+- **Graph-based PDF export** — the statement export can render a PDF report
+  with the dashboard's charts. (Released without changelog notes; recorded
+  here retroactively.)
+
 ## [1.2.0] - 2026-07-14
 ### Added
 - **Startup splash screen** — on launch the app now shows a proper loading card

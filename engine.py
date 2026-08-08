@@ -122,6 +122,7 @@ def build_dashboard(start=None, end=None, bank=None, card=None, source=None):
     spend = defaultdict(float); income = defaultdict(float)
     spend_n = defaultdict(int); income_n = defaultdict(int)
     m_in = defaultdict(float); m_out = defaultdict(float)
+    cat_m = defaultdict(lambda: defaultdict(int))   # spend cat -> month -> txn count
     tin = tout = 0.0
     cc_bills = 0.0; cc_n = 0
     large = []
@@ -136,6 +137,8 @@ def build_dashboard(start=None, end=None, bank=None, card=None, source=None):
             continue
         if r["direction"] == "OUT":
             spend[cat] += amt; spend_n[cat] += 1; m_out[m] += amt; tout += amt
+            if m and m != "unknown":
+                cat_m[cat][m] += 1
             if amt > 1000:
                 large.append(r)
         else:
@@ -177,6 +180,7 @@ def build_dashboard(start=None, end=None, bank=None, card=None, source=None):
         spend=spend_data, income=income_data,
         spend_n=dict(spend_n), income_n=dict(income_n),
         months=months, m_in=dict(m_in), m_out=dict(m_out), mnames=mnames,
+        cat_months={c: dict(v) for c, v in cat_m.items()},
         large=sorted(large, key=lambda r: -r["amount"])[:80],
         merchants=merchants, all_rows=rows,
     )

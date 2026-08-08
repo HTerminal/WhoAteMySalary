@@ -263,10 +263,122 @@ class MonthBars(QWidget):
         p.setPen(QColor(T.TEXT2)); p.drawText(QRectF(padl + 60, 2, 30, 14), Qt.AlignVCenter, "out")
 
 
+class TimeBars(QWidget):
+    """Single-series vertical bars over ordered buckets — days, weeks, months or
+    weekdays. Bottom labels thin out automatically when buckets are narrow,
+    hovering a bucket shows its exact value, and clicking a non-empty bucket
+    emits barClicked(key). Used by the drill-in Analytics view."""
+
+    barClicked = pyqtSignal(object)          # the clicked bucket's key
+
+    def __init__(self, parent=None, color=None, min_h=180):
+        super().__init__(parent)
+        self.setMinimumHeight(min_h)
+        self.setMouseTracking(True)
+        self.keys, self.vals, self.names = [], {}, {}
+        self.color = color or T.ACCENT
+        self._progress = 1.0
+        self._anim = None
+        self._hover = None
+
+    def getProgress(self):
+        return self._progress
+
+    def setProgress(self, v):
+        self._progress = v
+        self.update()
+
+    progress = pyqtProperty(float, fget=getProgress, fset=setProgress)
+
+    def setData(self, keys, vals, names, animate=True):
+        self.keys, self.vals, self.names = keys, vals, names
+        self._hover = None
+        if animate and ANIM and keys:
+            self._anim = QPropertyAnimation(self, b"progress")
+            self._anim.setStartValue(0.0); self._anim.setEndValue(1.0)
+            self._anim.setDuration(420); self._anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._anim.start(QAbstractAnimation.DeleteWhenStopped)
+        else:
+            self._progress = 1.0; self.update()
+
+    _PADL, _PADR, _PADT, _PADB = 56, 14, 20, 30
+
+    def _slot(self, x):
+        cw = self.width() - self._PADL - self._PADR
+        if not self.keys or cw <= 0:
+            return None
+        i = int((x - self._PADL) / (cw / len(self.keys)))
+        return i if 0 <= i < len(self.keys) else None
+
+    def _has_value(self, i):
+        return i is not None and i < len(self.keys) and self.vals.get(self.keys[i], 0) > 0
+
+    def mouseMoveEvent(self, e):
+        h = self._slot(e.x())
+        self.setCursor(Qt.PointingHandCursor if self._has_value(h) else Qt.ArrowCursor)
+        if h != self._hover:
+            self._hover = h
+            self.update()
+
+    def leaveEvent(self, e):
+        if self._hover is not None:
+            self._hover = None
+            self.update()
+
+    def mousePressEvent(self, e):
+        i = self._slot(e.x())
+        if self._has_value(i):
+            self.barClicked.emit(self.keys[i])
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        W, H = self.width(), self.height()
+        if not self.keys:
+            p.setPen(QColor(T.MUTED)); p.setFont(QFont(T.FONT, 10))
+            p.drawText(self.rect(), Qt.AlignCenter, "no data in this period")
+            return
+        vals = [self.vals.get(k, 0) for k in self.keys]
+        mx = max(vals + [1])
+        cw = W - self._PADL - self._PADR
+        ch = H - self._PADT - self._PADB
+        n = len(self.keys)
+        slot = cw / n
+        bw = max(2, min(26, slot * 0.62))
+        base = self._PADT + ch
+        for i in range(5):
+            yy = base - ch * i / 4
+            p.setPen(QPen(QColor(T.BORDER if i == 0 else T.PANEL2), 1))
+            p.drawLine(int(self._PADL), int(yy), int(W - self._PADR), int(yy))
+            p.setPen(QColor(T.MUTED)); p.setFont(QFont(T.FONT, 8))
+            p.drawText(QRectF(0, yy - 8, self._PADL - 8, 16),
+                       Qt.AlignRight | Qt.AlignVCenter, T.lakh(mx * i / 4))
+        # bottom labels: draw only as many as fit without colliding
+        step = max(1, math.ceil(n / max(1, int(cw // 52))))
+        for i, k in enumerate(self.keys):
+            v = vals[i]
+            x0 = self._PADL + slot * i + slot / 2
+            h = (v / mx) * ch * self._progress
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(T.lighten(self.color, 0.25) if i == self._hover else self.color))
+            p.drawRoundedRect(QRectF(x0 - bw / 2, base - h, bw, h), 2, 2)
+            if i % step == 0:
+                p.setPen(QColor(T.TEXT2)); p.setFont(QFont(T.FONT, 8))
+                p.drawText(QRectF(x0 - 34, base + 4, 68, 16), Qt.AlignCenter,
+                           self.names.get(k, str(k)))
+        if self._hover is not None and self._hover < n:
+            k = self.keys[self._hover]
+            p.setPen(QColor(T.TEXT)); p.setFont(QFont(T.FONT, 9))
+            p.drawText(QRectF(self._PADL, 0, cw, 16), Qt.AlignRight | Qt.AlignVCenter,
+                       f"{self.names.get(k, k)}  ·  Rs {T.inr(vals[self._hover])}"
+                       + ("  ·  click to open" if vals[self._hover] > 0 else ""))
+
+
 class HBars(QWidget):
-    def __init__(self, parent=None, label_w=190):
+    def __init__(self, parent=None, label_w=190, empty="no incoming data"):
         super().__init__(parent)
         self.label_w = label_w
+        self.empty = empty
         self.data = []
         self._progress = 1.0
         self._anim = None
@@ -296,7 +408,7 @@ class HBars(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         if not self.data:
             p.setPen(QColor(T.MUTED)); p.setFont(QFont(T.FONT, 10))
-            p.drawText(self.rect(), Qt.AlignCenter, "no incoming data")
+            p.drawText(self.rect(), Qt.AlignCenter, self.empty)
             return
         mx = max((v for _, v, _ in self.data), default=1) or 1
         chart_w = self.width() - self.label_w - 96
@@ -321,7 +433,7 @@ class KPICard(QFrame):
         super().__init__(parent)
         self.setObjectName("card")
         self.setFixedHeight(104)
-        self.setMinimumWidth(148)
+        self.setMinimumWidth(124)
         self.setCursor(Qt.PointingHandCursor)
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 14, 16, 14)
@@ -330,6 +442,10 @@ class KPICard(QFrame):
         t.setStyleSheet(f"color:{accent}; font-size:8.5pt; font-weight:700; background:transparent;")
         self.val = QLabel("0")
         self.val.setStyleSheet("font-size:18pt; font-weight:700; background:transparent;")
+        # let the row of five compress on narrow windows: without this the labels'
+        # text width becomes a hard minimum and the last card gets pushed off-screen
+        t.setMinimumWidth(1)
+        self.val.setMinimumWidth(1)
         v.addWidget(t)
         v.addWidget(self.val)
         v.addStretch(1)

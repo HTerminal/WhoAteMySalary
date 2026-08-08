@@ -18,21 +18,22 @@ from datetime import date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 
 from PyQt5.QtCore import (Qt, QDate, QTimer, QPropertyAnimation, QAbstractAnimation,
-                          pyqtSignal, QRectF, QObject, QEvent, QUrl)
+                          pyqtSignal, QRectF, QObject, QEvent, QUrl, QRect, QPoint, QSize)
 from PyQt5.QtGui import (QColor, QFont, QIcon, QPixmap, QPainter, QTextCharFormat,
-                         QPainterPath, QLinearGradient, QBrush, QPen, QTextDocument)
+                         QPainterPath, QLinearGradient, QBrush, QPen, QTextDocument, QCursor,
+                         QFontMetrics)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton, QVBoxLayout,
     QHBoxLayout, QGridLayout, QStackedWidget, QScrollArea, QComboBox, QLineEdit,
     QDateEdit, QCheckBox, QSpinBox, QPlainTextEdit, QTableWidget, QHeaderView,
     QAbstractItemView, QTreeWidget, QTreeWidgetItem, QDialog, QMessageBox,
     QButtonGroup, QSystemTrayIcon, QGraphicsOpacityEffect, QSizePolicy, QSplashScreen,
-    QFileDialog, QAbstractScrollArea)
+    QFileDialog, QAbstractScrollArea, QLayout, QSpacerItem, QGraphicsDropShadowEffect)
 
 import theme as T
 import engine
 import charts
-from charts import DonutChart, MonthBars, HBars, KPICard, NumItem
+from charts import DonutChart, HBars, TimeBars, KPICard, NumItem
 from workers import PollerWorker, ScanWorker, OAuthWorker
 import config
 import mailreader
@@ -58,10 +59,12 @@ def card():
     f = QFrame(); f.setObjectName("card"); return f
 
 
-def lbl(text, obj=None, color=None, bold=False, size=None):
+def lbl(text, obj=None, color=None, bold=False, size=None, wrap=False):
     q = QLabel(text)
     if obj:
         q.setObjectName(obj)
+    if wrap:
+        q.setWordWrap(True)      # long help texts flow with the window width
     css = "background:transparent;"
     if color:
         css += f"color:{color};"
@@ -96,8 +99,142 @@ def scroll_area(inner):
     sa = QScrollArea()
     sa.setWidgetResizable(True)
     sa.setWidget(inner)
-    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    # AsNeeded (not AlwaysOff): on a window narrower than the content's minimum,
+    # the tail end must stay reachable instead of being clipped away
+    sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
     return sa
+
+
+class FlowLayout(QLayout):
+    """A QHBoxLayout stand-in that wraps items onto extra rows when the window is
+    too narrow to fit them all — toolbars adapt to the screen instead of getting
+    clipped at the right edge. add_stretch() inserts a spring: whenever a row has
+    leftover width, the spring absorbs it, so items after the spring sit flush
+    right exactly like QHBoxLayout.addStretch() on a wide window.
+
+    fill=True additionally stretches each row's items to share its full width
+    (equal widths, like QHBoxLayout with equal stretch factors) — used for card
+    rows, which then collapse from side-by-side into stacked full-width cards
+    when the window can't fit them next to each other."""
+
+    def __init__(self, parent=None, hspacing=8, vspacing=8, fill=False):
+        super().__init__(parent)
+        self._items = []
+        self._h = hspacing
+        self._v = vspacing
+        self._fill = fill
+
+    # ---- QLayout plumbing
+    def addItem(self, item):
+        self._items.append(item)
+
+    def add_stretch(self):
+        self.addItem(QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum))
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            if it.widget() is not None:
+                s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return s + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    # ---- the actual flow
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        x0 = rect.x() + m.left()
+        right = rect.right() - m.right()
+        y = rect.y() + m.top()
+        line, x = [], x0
+        for it in self._items:
+            spring = it.widget() is None
+            hint = QSize(0, 0) if spring else it.sizeHint()
+            if not spring and line and x + hint.width() > right + 1:
+                y += self._flush(line, y, x0, right, test_only) + self._v
+                line, x = [], x0
+            line.append((it, hint, spring))
+            if not spring:
+                x += hint.width() + self._h
+        y += self._flush(line, y, x0, right, test_only)
+        return y + m.bottom() - rect.y()
+
+    def _flush(self, line, y, x0, right, test_only):
+        """Place one row (vertically centred); returns the row height."""
+        widgets = [(it, h) for it, h, sp in line if not sp]
+        if not widgets:
+            return 0
+        line_h = max(h.height() for _, h in widgets)
+        if test_only:
+            return line_h
+        springs = sum(1 for _, _, sp in line if sp)
+        avail = right + 1 - x0 - self._h * (len(widgets) - 1)
+        widths = [float(h.width()) for _, h in widgets]
+        if self._fill and not springs and avail > sum(widths):
+            # equalise like QHBoxLayout with stretch 1,1,…, but never shrink an
+            # item below its hint: keep raising the smallest until the extra runs out
+            extra = avail - sum(widths)
+            while extra > 0.5:
+                lo = min(widths)
+                idxs = [j for j, ww in enumerate(widths) if ww <= lo + 0.5]
+                nxt = min((ww for ww in widths if ww > lo + 0.5), default=None)
+                room = extra if nxt is None else (nxt - lo) * len(idxs)
+                if nxt is None or room >= extra:
+                    for j in idxs:
+                        widths[j] += extra / len(idxs)
+                    break
+                for j in idxs:
+                    widths[j] = nxt
+                extra -= room
+        spring_w = (max(0.0, avail - sum(widths)) / springs) if springs else 0.0
+        x, i = float(x0), 0
+        for it, h, sp in line:
+            if sp:
+                x += spring_w
+                continue
+            w = widths[i]; i += 1
+            if self._fill:
+                it.setGeometry(QRect(round(x), y, round(w), line_h))
+            else:
+                it.setGeometry(QRect(QPoint(round(x), y + (line_h - h.height()) // 2), h))
+            x += w + self._h
+        return line_h
+
+
+def hgroup(*widgets, spacing=6):
+    """Pack widgets into one unit so a FlowLayout wraps them together."""
+    w = QWidget()
+    w.setStyleSheet("background:transparent;")
+    h = QHBoxLayout(w)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(spacing)
+    for x in widgets:
+        h.addWidget(x)
+    return w
 
 
 def make_table(headers, stretch=None, sort_col=None, order=Qt.DescendingOrder):
@@ -413,16 +550,173 @@ class BulkDialog(QDialog):
             self.on_done()
 
 
+class TxnPopup(QDialog):
+    """A cute little card for what a chart bar holds — one transaction shows its
+    full details, several show the total plus a scrollable mini-list. Read-only:
+    glance at it, then ✕ (or Esc) and it's gone. Pops up next to the pointer
+    and can be dragged around."""
+
+    def __init__(self, win, rows, context=""):
+        super().__init__(win)
+        self.rows = rows if isinstance(rows, list) else [rows]
+        rows = self.rows = sorted(self.rows, key=lambda r: r.get("_dt") or "", reverse=True)
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setModal(True)
+        self._drag = None
+        out = rows[0]["direction"] != "IN"
+        col = T.RED if out else T.GREEN
+        total = sum(r["amount"] for r in rows)
+
+        c = QFrame(); c.setObjectName("card")
+        c.setStyleSheet(f"QFrame#card{{border-left:4px solid {col};}}")
+        sh = QGraphicsDropShadowEffect(self)
+        sh.setBlurRadius(28); sh.setOffset(0, 6); sh.setColor(QColor(0, 0, 0, 170))
+        c.setGraphicsEffect(sh)
+        outer = QVBoxLayout(self); outer.setContentsMargins(16, 16, 16, 16)
+        outer.addWidget(c)
+
+        v = QVBoxLayout(c); v.setContentsMargins(16, 12, 12, 14); v.setSpacing(5)
+        top = QHBoxLayout(); top.setSpacing(8)
+        top.addWidget(lbl("💸" if out else "💰", size=15))
+        top.addWidget(lbl(("−" if out else "+") + "₹" + T.inr(total),
+                          color=col, bold=True, size=16))
+        top.addStretch(1)
+        x = btn("✕", self.reject, "ghost")
+        x.setFixedSize(26, 26)
+        x.setStyleSheet("QPushButton{padding:0px; border-radius:13px; font-weight:400;}")
+        x.setToolTip("Close (Esc)")
+        top.addWidget(x, alignment=Qt.AlignTop)
+        v.addLayout(top)
+
+        if len(rows) == 1:
+            r = rows[0]
+            m = lbl((r.get("merchant") or "(transaction)")[:70], bold=True, size=12)
+            m.setWordWrap(True)
+            v.addWidget(m)
+            v.addWidget(lbl(self._when(r), color=T.TEXT2, size=9))
+            cat = r.get("category") or r.get("guessed_category") or "Uncategorised"
+            pill = lbl(cat, bold=True, size=8)
+            pill.setStyleSheet(f"background:{T.PANEL2}; color:{T.TEXT}; "
+                               "border-radius:9px; padding:4px 10px;")
+            pr = QHBoxLayout(); pr.setSpacing(6)
+            pr.addWidget(pill)
+            pr.addWidget(lbl(_bank_card(r), color=T.MUTED, size=9))
+            pr.addStretch(1)
+            v.addLayout(pr)
+        else:
+            v.addWidget(lbl(f"{len(rows)} transactions"
+                            + (f"  ·  {context}" if context else ""),
+                            color=T.MUTED, size=9))
+            body = QWidget(); body.setStyleSheet("background:transparent;")
+            bv = QVBoxLayout(body); bv.setContentsMargins(0, 0, 0, 0); bv.setSpacing(0)
+            for i, r in enumerate(rows):
+                if i:
+                    sep = QFrame(); sep.setFixedHeight(1)
+                    sep.setStyleSheet(f"background:{T.BORDER};")
+                    bv.addWidget(sep)
+                bv.addWidget(self._mini(r, col, out))
+            if body.sizeHint().height() + 4 > 236:      # list will scroll —
+                bv.setContentsMargins(0, 0, 14, 0)      # clear the scrollbar
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setWidget(body)
+            sa.setFrameShape(QFrame.NoFrame)
+            sa.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            # the app-wide QSS paints scroll-area interiors page-colour; inside
+            # the card they must stay see-through
+            sa.setStyleSheet("QScrollArea{background:transparent;}"
+                             "QScrollArea>QWidget>QWidget{background:transparent;}")
+            sa.setFixedHeight(min(body.sizeHint().height() + 4, 236))
+            v.addWidget(sa)
+
+        self.setFixedWidth(340)
+        self.adjustSize()
+
+    def _mini(self, r, col, out):
+        """One line of the multi-transaction list: merchant + when on the left,
+        amount on the right."""
+        w = QWidget(); w.setStyleSheet("background:transparent;")
+        h = QHBoxLayout(w); h.setContentsMargins(0, 5, 0, 5); h.setSpacing(8)
+        left = QVBoxLayout(); left.setSpacing(1)
+        f = QFont(T.FONT, 10); f.setBold(True)
+        name = lbl(QFontMetrics(f).elidedText(r.get("merchant") or "(transaction)",
+                                              Qt.ElideRight, 170), bold=True, size=10)
+        cat = (r.get("category") or r.get("guessed_category") or "")[:16]
+        meta = lbl(self._when_short(r) + (f"  ·  {cat}" if cat else ""),
+                   color=T.MUTED, size=8)
+        # a long name must clip itself, never push the amount off the card
+        name.setMinimumWidth(1); meta.setMinimumWidth(1)
+        left.addWidget(name); left.addWidget(meta)
+        h.addLayout(left, 1)
+        h.addWidget(lbl(("−" if out else "+") + "₹" + T.inr(r["amount"]),
+                        color=col, bold=True, size=11))
+        return w
+
+    @staticmethod
+    def _when(r):
+        s = dt_str(r)
+        try:
+            d = datetime.strptime(s, "%Y-%m-%d %H:%M")
+            return f"{d:%a, %d %b %Y}  ·  {d:%H:%M}"
+        except ValueError:
+            return s
+
+    @staticmethod
+    def _when_short(r):
+        s = dt_str(r)
+        try:
+            d = datetime.strptime(s, "%Y-%m-%d %H:%M")
+            return f"{d:%d %b %y} · {d:%H:%M}"
+        except ValueError:
+            return s
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        # appear right where the user just clicked, kept fully on screen
+        g = QCursor.pos()
+        scr = QApplication.screenAt(g) or QApplication.primaryScreen()
+        av = scr.availableGeometry()
+        self.move(min(max(g.x() - self.width() // 2, av.left() + 8),
+                      av.right() - self.width() - 8),
+                  min(max(g.y() + 12, av.top() + 8),
+                      av.bottom() - self.height() - 8))
+
+    # frameless -> make the card draggable
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._drag = e.globalPos() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if self._drag is not None and e.buttons() & Qt.LeftButton:
+            self.move(e.globalPos() - self._drag)
+
+    def mouseReleaseEvent(self, e):
+        self._drag = None
+
+
 class TxnDialog(QDialog):
     """Sortable, SEARCHABLE transaction list. Used for category drill-in, the
-    money-in / money-out / all-transactions KPI cards, and dashboard search."""
-    def __init__(self, win, title, direction=None, category=None, search="", bucket=None):
+    money-in / money-out / all-transactions KPI cards, and dashboard search.
+    The Analytics toggle swaps the list for charts + how-often stats."""
+    def __init__(self, win, title, direction=None, category=None, search="", bucket=None,
+                 rows=None):
+        """rows: optional pre-selected transactions — the dialog then shows exactly
+        those instead of querying (used when a chart bar is clicked)."""
         super().__init__(win)
         self.win, self.dir, self.cat, self.bucket = win, direction, category, bucket
+        self.rows_override = rows
         self.setWindowTitle(title)
-        self.resize(740, 600)
+        self.resize(760, 620)
+        self._visible = []
+        self._an_dated, self._an_bucket, self._an_names = [], None, {}
         v = QVBoxLayout(self); v.setContentsMargins(18, 16, 18, 16); v.setSpacing(8)
-        v.addWidget(lbl(title, bold=True, size=14))
+        trow = QHBoxLayout()
+        trow.addWidget(lbl(title, bold=True, size=14))
+        trow.addStretch(1)
+        self.an_btn = btn("📊  Analytics", self._toggle_view, "ghost")
+        trow.addWidget(self.an_btn)
+        v.addLayout(trow)
         self.sub = lbl("", color=T.MUTED, size=10)
         v.addWidget(self.sub)
         srow = QHBoxLayout()
@@ -438,19 +732,28 @@ class TxnDialog(QDialog):
         self.table.setColumnWidth(0, 158)
         self.table.setColumnWidth(3, 150)
         self.table.doubleClicked.connect(self._dbl)
-        v.addWidget(self.table, 1)
-        v.addWidget(lbl("Click a column header to sort · double-click a row to tag", color=T.MUTED, size=9))
+        tpage = QWidget(); tv = QVBoxLayout(tpage)
+        tv.setContentsMargins(0, 0, 0, 0); tv.setSpacing(8)
+        tv.addWidget(self.table, 1)
+        tv.addWidget(lbl("Click a column header to sort · double-click a row to tag", color=T.MUTED, size=9))
+        self.stack = QStackedWidget()
+        self.stack.addWidget(tpage)
+        self.stack.addWidget(self._build_analytics())
+        v.addWidget(self.stack, 1)
         rb = QHBoxLayout(); rb.addStretch(1); rb.addWidget(btn("Close", self.reject, "ghost"))
         v.addLayout(rb)
         self.reload()
         self.search.setFocus()
 
     def reload(self):
-        # inherits the dashboard's bank / card / filter scope
-        self._rows = engine.txns_filtered(self.win.rng_from, self.win.rng_to,
-                                          self.dir, self.cat, self.bucket,
-                                          self.win.f_bank or None, self.win.f_card or None,
-                                          self.win.f_source or None)
+        if self.rows_override is not None:
+            self._rows = self.rows_override
+        else:
+            # inherits the dashboard's bank / card / filter scope
+            self._rows = engine.txns_filtered(self.win.rng_from, self.win.rng_to,
+                                              self.dir, self.cat, self.bucket,
+                                              self.win.f_bank or None, self.win.f_card or None,
+                                              self.win.f_source or None)
         for r in self._rows:
             r["_dt"] = dt_str(r)
         self._apply()
@@ -482,11 +785,19 @@ class TxnDialog(QDialog):
         t.setSortingEnabled(True)
         t.sortItems(0, Qt.DescendingOrder)      # newest first
         total = sum(r["amount"] for r in rows)
-        scope = self.win.scope_text()
-        self.sub.setText(f"{self.win.rng_from} → {self.win.rng_to}"
-                         + (f"  ·  {scope}" if scope else "")
-                         + f"  ·  {len(rows)} transaction(s)  ·  ₹{T.inr(total)}"
-                         + (f"   (filtered from {len(self._rows)})" if q else ""))
+        if self.rows_override is not None:
+            # a fixed bucket of rows — the window range doesn't describe it
+            self.sub.setText(f"{len(rows)} transaction(s)  ·  ₹{T.inr(total)}"
+                             + (f"   (filtered from {len(self._rows)})" if q else ""))
+        else:
+            scope = self.win.scope_text()
+            self.sub.setText(f"{self.win.rng_from} → {self.win.rng_to}"
+                             + (f"  ·  {scope}" if scope else "")
+                             + f"  ·  {len(rows)} transaction(s)  ·  ₹{T.inr(total)}"
+                             + (f"   (filtered from {len(self._rows)})" if q else ""))
+        self._visible = rows
+        if self.stack.currentIndex() == 1:      # analytics is showing — keep it live
+            self._fill_analytics(rows, animate=False)
 
     def _dbl(self, idx):
         item = self.table.item(idx.row(), 1)
@@ -494,6 +805,206 @@ class TxnDialog(QDialog):
         r = next((x for x in self._rows if x["id"] == rid), None)
         if r:
             TagDialog(self.win, r, on_done=self.reload).exec_()
+
+    # ---- analytics view
+    WDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    WDAYS_FULL = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                  "Friday", "Saturday", "Sunday"]
+
+    def _build_analytics(self):
+        body = QWidget()
+        av = QVBoxLayout(body); av.setContentsMargins(0, 0, 8, 0); av.setSpacing(10)
+        self.an_note = lbl("", color=T.MUTED, size=9, wrap=True)
+        av.addWidget(self.an_note)
+        self.an_chips_w = QWidget(); self.an_chips_w.setStyleSheet("background:transparent;")
+        self.an_chips = FlowLayout(self.an_chips_w, hspacing=8, vspacing=8, fill=True)
+        av.addWidget(self.an_chips_w)
+
+        c1 = card(); v1 = QVBoxLayout(c1); v1.setContentsMargins(14, 12, 14, 12)
+        self.an_t1 = lbl("Spending over time", bold=True, size=11)
+        v1.addWidget(self.an_t1)
+        self.an_t1sub = lbl("", color=T.MUTED, size=8)
+        v1.addWidget(self.an_t1sub)
+        self.an_time = TimeBars(min_h=190)
+        self.an_time.barClicked.connect(self._time_bar)
+        v1.addWidget(self.an_time)
+        av.addWidget(c1)
+
+        c2 = card(); v2 = QVBoxLayout(c2); v2.setContentsMargins(14, 12, 14, 12)
+        v2.addWidget(lbl("By day of week", bold=True, size=11))
+        v2.addWidget(lbl("which weekdays this money moves on · click a bar to see those transactions",
+                         color=T.MUTED, size=8))
+        self.an_wday = TimeBars(min_h=150, color="#8b5cf6")
+        self.an_wday.barClicked.connect(self._wday_bar)
+        v2.addWidget(self.an_wday)
+        av.addWidget(c2)
+
+        c3 = card(); v3 = QVBoxLayout(c3); v3.setContentsMargins(14, 12, 14, 12)
+        v3.addWidget(lbl("Top merchants", bold=True, size=11))
+        self.an_merch = HBars(label_w=190, empty="no data")
+        v3.addWidget(self.an_merch)
+        av.addWidget(c3)
+        av.addStretch(1)
+        return scroll_area(body)
+
+    def _toggle_view(self):
+        to_analytics = self.stack.currentIndex() == 0
+        self.stack.setCurrentIndex(1 if to_analytics else 0)
+        self.an_btn.setText("≣  Transactions" if to_analytics else "📊  Analytics")
+        if to_analytics:
+            self._fill_analytics(self._visible)
+
+    @staticmethod
+    def _chip(title, value, sub=""):
+        f = card(); cv = QVBoxLayout(f)
+        cv.setContentsMargins(12, 9, 12, 9); cv.setSpacing(1)
+        cv.addWidget(lbl(title, color=T.MUTED, bold=True, size=7))
+        cv.addWidget(lbl(value, bold=True, size=11))
+        if sub:
+            cv.addWidget(lbl(sub, color=T.MUTED, size=8))
+        return f
+
+    def _fill_analytics(self, rows, animate=True):
+        """Frequency + rhythm of the money in this list: how much, how often
+        (gap between purchase days), when (timeline, weekday), and where (top
+        merchants). Mixed lists analyse the money-out side; pure money-in lists
+        analyse the incoming side."""
+        outs = [r for r in rows if r["direction"] == "OUT"]
+        kind = "money out"
+        if not outs and rows:
+            outs, kind = [r for r in rows if r["direction"] == "IN"], "money in"
+        self.an_t1.setText(("Spending" if kind == "money out" else "Incoming") + " over time")
+
+        while self.an_chips.count():
+            it = self.an_chips.takeAt(0)
+            w = it.widget()
+            if w:
+                w.deleteLater()
+
+        if not outs:
+            self.an_note.setText("Nothing to analyse — no transactions in this list.")
+            self.an_t1sub.setText("")
+            self._an_dated, self._an_bucket, self._an_names = [], None, {}
+            self.an_time.setData([], {}, {}, animate=False)
+            self.an_wday.setData([], {}, {}, animate=False)
+            self.an_merch.setData([], animate=False)
+            return
+
+        note = f"Analysing the {len(outs)} {kind} transaction(s) in this list"
+        if len(outs) != len(rows):
+            note += f" (of the {len(rows)} shown)"
+        self.an_note.setText(note + ". The search box above narrows this too.")
+
+        total = sum(r["amount"] for r in outs)
+        n = len(outs)
+        dated = []
+        for r in outs:
+            try:
+                dated.append((date.fromisoformat((r.get("_dt") or "")[:10]), r))
+            except ValueError:
+                continue
+        udays = sorted({d for d, _ in dated})
+        wd_tot = [0.0] * 7
+        for d, r in dated:
+            wd_tot[d.weekday()] += r["amount"]
+
+        chips = [("TOTAL", "₹" + T.inr(total), ""),
+                 ("TRANSACTIONS", str(n), ""),
+                 ("AVG PER TRANSACTION", "₹" + T.inr(total / n), "")]
+        start = end = None
+        if udays:
+            try:
+                r_from, r_to = (date.fromisoformat(self.win.rng_from),
+                                date.fromisoformat(self.win.rng_to))
+            except ValueError:
+                r_from, r_to = udays[0], udays[-1]
+            # measure from the first purchase actually in view, so "All time"
+            # doesn't dilute the averages with empty years
+            start = max(r_from, udays[0])
+            end = max(r_to, udays[-1])
+            span = max(1, (end - start).days + 1)
+            k = len(udays)
+            if k >= 2:
+                gap = (udays[-1] - udays[0]).days / (k - 1)
+                how = "≈ daily" if gap < 1.5 else f"every ~{gap:.1f} days"
+            else:
+                how = "seen on one day only"
+            word = "purchase" if kind == "money out" else "credit"
+            chips += [("HOW OFTEN", how, f"average gap between {word} days"),
+                      ("ACTIVE DAYS", f"{k} of {span}", f"{start:%d %b %y} → {end:%d %b %y}"),
+                      ("MONTHLY PACE", "₹" + T.inr(total / span * 30.44),
+                       "what this window extrapolates to")]
+            bi = max(range(7), key=lambda i: wd_tot[i])
+            chips.append(("BUSIEST WEEKDAY", self.WDAYS_FULL[bi], "₹" + T.inr(wd_tot[bi])))
+        big = max(outs, key=lambda r: r["amount"])
+        chips.append(("BIGGEST ONE", "₹" + T.inr(big["amount"]),
+                      (big.get("merchant") or "—")[:24]))
+        m_tot = {}
+        for r in outs:
+            m = (r.get("merchant") or "").strip() or "(no name)"
+            m_tot[m] = m_tot.get(m, 0.0) + r["amount"]
+        top = sorted(m_tot.items(), key=lambda x: -x[1])
+        chips.append(("TOP MERCHANT", top[0][0][:24],
+                      f"₹{T.inr(top[0][1])}  ·  {top[0][1] / total * 100:.0f}% of the total"))
+        for c in chips:
+            self.an_chips.addWidget(self._chip(*c))
+
+        # timeline — bucket size picked from the window the data actually spans
+        keys, vals, names = [], {}, {}
+        sub1, bucket = "", None
+        if udays:
+            span = (end - start).days + 1
+            if span <= 70:
+                sub1 = "per day"
+                cur = start
+                while cur <= end:
+                    kk = cur.isoformat()
+                    keys.append(kk); names[kk] = f"{cur.day} {cur:%b}"
+                    cur += timedelta(days=1)
+                bucket = lambda d: d.isoformat()
+            elif span <= 430:
+                sub1 = "per week (label = week start)"
+                cur = start - timedelta(days=start.weekday())
+                stop = end - timedelta(days=end.weekday())
+                while cur <= stop:
+                    kk = cur.isoformat()
+                    keys.append(kk); names[kk] = f"{cur.day} {cur:%b}"
+                    cur += timedelta(days=7)
+                bucket = lambda d: (d - timedelta(days=d.weekday())).isoformat()
+            else:
+                sub1 = "per month"
+                cur = date(start.year, start.month, 1)
+                while cur <= end:
+                    kk = cur.strftime("%Y-%m")
+                    keys.append(kk); names[kk] = cur.strftime("%b %y")
+                    cur = date(cur.year + (cur.month == 12), cur.month % 12 + 1, 1)
+                bucket = lambda d: d.strftime("%Y-%m")
+            for d, r in dated:
+                b = bucket(d)
+                vals[b] = vals.get(b, 0.0) + r["amount"]
+        # remembered so a clicked bar can pop up exactly its transactions
+        self._an_dated, self._an_bucket, self._an_names = dated, bucket, names
+        self.an_t1sub.setText(sub1 + (" · click a bar to see those transactions" if keys else ""))
+        self.an_time.setData(keys, vals, names, animate=animate)
+        self.an_wday.setData(list(range(7)), {i: wd_tot[i] for i in range(7)},
+                             {i: self.WDAYS[i] for i in range(7)}, animate=animate)
+        self.an_merch.setData([((m[:21] + "…") if len(m) > 22 else m, v, T.PAL[i % len(T.PAL)])
+                               for i, (m, v) in enumerate(top[:8])], animate=animate)
+
+    def _time_bar(self, key):
+        """A clicked timeline bar -> the little card with that day/week/month's
+        transaction(s); several scroll inside it."""
+        if not self._an_bucket:
+            return
+        rows = [r for d, r in self._an_dated if self._an_bucket(d) == key]
+        if rows:
+            TxnPopup(self.win, rows, context=str(self._an_names.get(key, key))).exec_()
+
+    def _wday_bar(self, wd):
+        """A clicked weekday bar -> the little card with that weekday's txns."""
+        rows = [r for d, r in getattr(self, "_an_dated", []) if d.weekday() == wd]
+        if rows:
+            TxnPopup(self.win, rows, context=f"{self.WDAYS_FULL[wd]}s").exec_()
 
 
 class ExportDialog(QDialog):
@@ -862,32 +1373,32 @@ class OverviewPage(Page):
         self.v = QVBoxLayout(body); self.v.setContentsMargins(0, 0, 8, 0); self.v.setSpacing(14)
         self._sig = None
 
-        # date range bar
-        bar = card(); bh = QHBoxLayout(bar); bh.setContentsMargins(14, 10, 14, 10)
+        # date range bar — wraps onto extra rows when the window is narrow
+        bar = card(); bh = FlowLayout(bar); bh.setContentsMargins(14, 10, 14, 10)
         bh.addWidget(lbl("PERIOD", color=T.MUTED, bold=True, size=9))
         for txt, fn in [("Last 2d", lambda: self._last(2)), ("Last 7d", lambda: self._last(7)),
                         ("Last 30d", lambda: self._last(30)), ("Last 90d", lambda: self._last(90)),
-                        ("This year", self._year), ("All time", self._all)]:
+                        ("This month", self._month), ("This year", self._year), ("All time", self._all)]:
             bh.addWidget(btn(txt, fn, "ghost"))
-        bh.addStretch(1)
-        bh.addWidget(lbl("Range:", color=T.MUTED, bold=True, size=9))
+        bh.add_stretch()
         self.de_from = date_edit()
         self.de_to = date_edit()
         self.de_from.dateChanged.connect(self._apply)
         self.de_to.dateChanged.connect(self._apply)
-        bh.addWidget(self.de_from); bh.addWidget(lbl("to", color=T.MUTED)); bh.addWidget(self.de_to)
+        bh.addWidget(hgroup(lbl("Range:", color=T.MUTED, bold=True, size=9),
+                            self.de_from, lbl("to", color=T.MUTED), self.de_to))
         self.v.addWidget(bar)
 
         # scope bar — narrow the whole dashboard to one bank / card / filter
-        scbar = card(); ph = QHBoxLayout(scbar); ph.setContentsMargins(14, 10, 14, 10); ph.setSpacing(8)
+        scbar = card(); ph = FlowLayout(scbar); ph.setContentsMargins(14, 10, 14, 10)
         ph.addWidget(lbl("SHOW", color=T.MUTED, bold=True, size=9))
         self.cb_bank = self._scope_combo("All banks")
         self.cb_card = self._scope_combo("All cards")
         self.cb_src = self._scope_combo("All filters")
         for name, cb in (("Bank", self.cb_bank), ("Card", self.cb_card), ("Filter", self.cb_src)):
-            ph.addWidget(lbl(name, color=T.MUTED, size=9)); ph.addWidget(cb)
+            ph.addWidget(hgroup(lbl(name, color=T.MUTED, size=9), cb))
         ph.addWidget(btn("Reset", self._scope_reset, "ghost"))
-        ph.addStretch(1)
+        ph.add_stretch()
         self.scope_note = lbl("", color=T.MUTED, size=9)
         ph.addWidget(self.scope_note)
         ph.addWidget(btn("See these transactions", self._scope_txns))
@@ -905,8 +1416,9 @@ class OverviewPage(Page):
         sh.addWidget(btn("Search", self._do_search))
         self.v.addWidget(sbar)
 
-        # KPI row
-        krow = QHBoxLayout(); krow.setSpacing(12)
+        # KPI row — cards wrap onto a second row when the window is narrow
+        kw = QWidget(); kw.setStyleSheet("background:transparent;")
+        krow = FlowLayout(kw, hspacing=12, vspacing=12, fill=True)
         self.k_out = KPICard("Money out", T.RED)
         self.k_cc = KPICard("Credit card bills", "#8b5cf6")
         self.k_in = KPICard("Money in", T.GREEN)
@@ -920,12 +1432,13 @@ class OverviewPage(Page):
         self.k_in.clicked.connect(lambda: self.win.open_txns("Money in", bucket="in"))
         self.k_net.clicked.connect(lambda: self.win.open_txns("All transactions"))
         self.k_n.clicked.connect(lambda: self.win.open_txns("All transactions"))
-        self.v.addLayout(krow)
+        self.v.addWidget(kw)
         self.v.addWidget(lbl("Tip: click a card above to see its transactions (searchable).",
                              color=T.MUTED, size=8))
 
-        # donut + months
-        mid = QHBoxLayout(); mid.setSpacing(12)
+        # donut + category habits — side by side, stacking vertically on narrow windows
+        mw = QWidget(); mw.setStyleSheet("background:transparent;")
+        mid = FlowLayout(mw, hspacing=12, vspacing=12, fill=True)
         dcard = card(); dv = QVBoxLayout(dcard); dv.setContentsMargins(16, 14, 16, 14)
         dv.addWidget(lbl("Where the money went", bold=True, size=12))
         dv.addWidget(lbl("click a slice or a legend row to see the transactions", color=T.MUTED, size=9))
@@ -937,15 +1450,20 @@ class OverviewPage(Page):
         lw = QWidget(); lw.setLayout(self.legend)
         drow.addWidget(lw, 1)
         dv.addLayout(drow)
-        mid.addWidget(dcard, 1)
+        mid.addWidget(dcard)
 
         mcard = card(); mv = QVBoxLayout(mcard); mv.setContentsMargins(16, 14, 16, 14)
-        mv.addWidget(lbl("Month by month", bold=True, size=12))
-        mv.addWidget(lbl("green = money in · red = money out", color=T.MUTED, size=9))
-        self.months = MonthBars()
-        mv.addWidget(self.months, 1)
-        mid.addWidget(mcard, 1)
-        self.v.addLayout(mid)
+        mv.addWidget(lbl("Category habits", bold=True, size=12))
+        mv.addWidget(lbl("how often each category gets used in this period · double-click to open it",
+                         color=T.MUTED, size=9))
+        self.habits = make_table(["Category", "Times", "/ month", "Quietest", "Busiest"], stretch=0)
+        for col, w in ((1, 58), (2, 66), (3, 102), (4, 102)):
+            self.habits.setColumnWidth(col, w)
+        self.habits.setMinimumHeight(250)
+        self.habits.doubleClicked.connect(self._habit_dbl)
+        mv.addWidget(self.habits, 1)
+        mid.addWidget(mcard)
+        self.v.addWidget(mw)
 
         # income
         icard = card(); iv = QVBoxLayout(icard); iv.setContentsMargins(16, 14, 16, 14)
@@ -1001,6 +1519,11 @@ class OverviewPage(Page):
 
     def _all(self):
         self.win.rng_from, self.win.rng_to = "2000-01-01", date.today().isoformat()
+        self._set_dates(self.win.rng_from, self.win.rng_to); self.refresh()
+
+    def _month(self):
+        t = date.today()
+        self.win.rng_from, self.win.rng_to = t.replace(day=1).isoformat(), t.isoformat()
         self._set_dates(self.win.rng_from, self.win.rng_to); self.refresh()
 
     def _year(self):
@@ -1158,11 +1681,65 @@ class OverviewPage(Page):
         self.k_net.setValue(d["net"], "₹", animate=anim)
         self.k_n.setValue(d["rows_n"], "", fmt=lambda v: f"{int(v):,}", animate=anim)
         self.donut.setData(d["spend"], "spending", "₹" + T.lakh(d["tout"]), animate=anim)
-        self.months.setData(d["months"], d["m_in"], d["m_out"], d["mnames"], animate=anim)
         self.income.setData(d["income"], animate=anim)
         self._fill_legend(d["spend"], d["tout"] or 1)
+        self._fill_habits(d)
         self._fill_tree(d["merchants"])
         self._fill_large(d["large"])
+
+    def _fill_habits(self, d):
+        """The 'Category habits' table: for every spending category in range,
+        how many times it was used, its average per month, and its quietest /
+        busiest month (by number of transactions) — e.g. Fuel: 42×, ~5.2/month,
+        quietest Jan 26 (2×), busiest Mar 26 (9×)."""
+        cat_m = d.get("cat_months", {})
+        # calendar months of the window, clamped to the first transaction so
+        # "All time" doesn't drown the averages in empty years
+        try:
+            r_from = date.fromisoformat(self.win.rng_from)
+            r_to = date.fromisoformat(self.win.rng_to)
+        except ValueError:
+            r_from = r_to = date.today()
+        first = min((m for mm in cat_m.values() for m in mm), default=None)
+        start = date(r_from.year, r_from.month, 1)
+        if first:
+            start = max(start, date(int(first[:4]), int(first[5:7]), 1))
+        months, cur, stop = [], start, date(r_to.year, r_to.month, 1)
+        while cur <= stop and len(months) < 1200:
+            months.append(cur.strftime("%Y-%m"))
+            cur = date(cur.year + (cur.month == 12), cur.month % 12 + 1, 1)
+        nm = max(1, len(months))
+
+        def ml(m):
+            return f"{datetime.strptime(m, '%Y-%m'):%b %y}"
+
+        colors = {c: col for c, _v, col in d["spend"]}
+        t = self.habits
+        t.setSortingEnabled(False)
+        t.setRowCount(len(cat_m))
+        for i, (cat, mm) in enumerate(sorted(cat_m.items(), key=lambda x: -sum(x[1].values()))):
+            n = sum(mm.values())
+            it = txt_item(cat)
+            it.setForeground(QColor(colors.get(cat, T.TEXT)))
+            t.setItem(i, 0, it)
+            t.setItem(i, 1, NumItem(f"{n}×", n))
+            t.setItem(i, 2, NumItem(f"{n / nm:.1f}×", n / nm))
+            if nm >= 2:
+                counts = [(m, mm.get(m, 0)) for m in months]
+                lo = min(counts, key=lambda x: x[1])
+                hi = max(counts, key=lambda x: x[1])
+                t.setItem(i, 3, NumItem(f"{ml(lo[0])} ({lo[1]}×)", lo[1]))
+                t.setItem(i, 4, NumItem(f"{ml(hi[0])} ({hi[1]}×)", hi[1]))
+            else:
+                t.setItem(i, 3, NumItem("—", 0))
+                t.setItem(i, 4, NumItem("—", 0))
+        t.setSortingEnabled(True)
+        t.sortItems(1, Qt.DescendingOrder)
+
+    def _habit_dbl(self, idx):
+        it = self.habits.item(idx.row(), 0)
+        if it:
+            self.win.open_category(it.text(), "OUT")
 
     def _fill_legend(self, spend, total):
         while self.legend.count():
@@ -1653,7 +2230,7 @@ class SettingsPage(Page):
         v.addWidget(lbl("Mailboxes", bold=True, size=12))
         v.addWidget(lbl("Accounts to watch. Sign in with Google or Microsoft (recommended — "
                         "no password stored), or use a 16-character Gmail app password.",
-                        color=T.MUTED, size=9))
+                        color=T.MUTED, size=9, wrap=True))
         for a in cfg.get("accounts", []):
             em = a.get("email", "")
             is_o = (a.get("auth") or "app_password").lower() in (
@@ -1701,7 +2278,7 @@ class SettingsPage(Page):
         v.addWidget(btn("Add mailbox", self._acc_add), alignment=Qt.AlignLeft)
         v.addWidget(lbl("Google / Microsoft: a browser opens once for you to grant read-only "
                         "access. App password (Gmail only): Google Account → Security → "
-                        "2-Step Verification → App passwords.", color=T.MUTED, size=8))
+                        "2-Step Verification → App passwords.", color=T.MUTED, size=8, wrap=True))
         self.v.addWidget(c)
         self._oauth_client_card(cfg)
 
@@ -1778,7 +2355,7 @@ class SettingsPage(Page):
         v.addWidget(lbl("Google / Microsoft sign-in setup (advanced)", bold=True, size=12))
         v.addWidget(lbl("Only needed if the app doesn't already ship with a client. Create a "
                         "free OAuth client and paste it here (see the README). Leave a section "
-                        "blank if you don't use that provider.", color=T.MUTED, size=9))
+                        "blank if you don't use that provider.", color=T.MUTED, size=9, wrap=True))
 
         # Google (Desktop app client: id + secret)
         gsrc = oauth.client_creds(cfg=cfg, provider="google")[2]
@@ -1844,7 +2421,7 @@ class SettingsPage(Page):
         c = card(); v = QVBoxLayout(c); v.setContentsMargins(16, 14, 16, 14)
         v.addWidget(lbl("Tracked sources (filters)", bold=True, size=12))
         v.addWidget(lbl("An email is tracked when it matches one of these. 'both' checks the primary field first.",
-                        color=T.MUTED, size=9))
+                        color=T.MUTED, size=9, wrap=True))
         for s in cfg.get("sources", []):
             m, p = mailreader.effective_mode(s)
             r = QHBoxLayout()
@@ -1897,7 +2474,7 @@ class SettingsPage(Page):
             b.setMaximumWidth(64); r1.addWidget(b)
         r1.addStretch(1); v.addLayout(r1)
         v.addWidget(lbl("Lower = new transactions are caught faster (more frequent Gmail checks). "
-                        "60 seconds = once a minute.", color=T.MUTED, size=8))
+                        "60 seconds = once a minute.", color=T.MUTED, size=8, wrap=True))
         r2 = QHBoxLayout(); r2.addWidget(lbl("Backfill days on first run", color=T.TEXT2, size=9))
         self.g_back = no_wheel(QSpinBox()); self.g_back.setRange(0, 3650); self.g_back.setValue(int(cfg.get("backfill_days", 3)))
         r2.addWidget(self.g_back); r2.addStretch(1); v.addLayout(r2)
@@ -1937,7 +2514,7 @@ class SettingsPage(Page):
         v.addWidget(lbl("Your categories", bold=True, size=12))
         v.addWidget(lbl(f"{len(EXPENSE_CATEGORIES) + len(INCOME_CATEGORIES)} built-in categories. "
                         "Add your own here — or just type a new one while tagging a transaction.",
-                        color=T.MUTED, size=9))
+                        color=T.MUTED, size=9, wrap=True))
         customs = engine.custom_categories()
         if customs:
             for name in customs:
@@ -2031,8 +2608,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("WhoAteMySalary")
         self.setWindowIcon(make_icon())
-        self.resize(1240, 820)
-        self.setMinimumSize(1080, 700)
+        # size to the screen actually in front of the user: the old fixed
+        # 1240×820 / min 1080×700 spilled off small or DPI-scaled displays
+        avail = QApplication.primaryScreen().availableGeometry()
+        self.setMinimumSize(min(1000, avail.width() - 24), min(600, avail.height() - 24))
+        self.resize(min(1240, avail.width() - 24), min(820, avail.height() - 24))
 
         cfg = engine.init()
         charts.ANIM = bool(cfg.get("animations", True))
