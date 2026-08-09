@@ -21,6 +21,11 @@ _ANY_AMT_RE = re.compile(r'(' + _CUR + r')\s*(' + _NUM + r')', re.I)
 # amount stated WITHOUT a currency symbol after a verb, e.g. PNB "Debited with 1800.00"
 _VERB_NOCUR_RE = re.compile(r'(?:debited|credited|spent|withdrawn|deducted|paid)\s+'
                             r'(?:with|by|of)\s+(?:rs\.?\s*|inr\s*)?(' + _NUM + r')', re.I)
+# a receipt's total line, e.g. Zomato "Total paid - ₹281.13" / "Grand Total ₹420".
+# Receipts put the final total LAST (after per-item prices), so the last match wins.
+_TOTAL_AMT_RE = re.compile(r'(?:total\s+paid|amount\s+paid|grand\s+total|order\s+total'
+                           r'|total(?:\s+amount)?)\s*[-:–—]?\s*(' + _CUR + r')\s*('
+                           + _NUM + r')', re.I)
 
 
 def _mk_amt(m):
@@ -50,6 +55,13 @@ def _extract_amount(blob):
                 return val, "INR"
         except ValueError:
             pass
+    # a receipt's total line beats the first-amount fallback (which would pick
+    # the first ITEM price on order receipts); the last total is the grand one
+    totals = list(_TOTAL_AMT_RE.finditer(blob))
+    if totals:
+        r = _mk_amt(totals[-1])
+        if r:
+            return r
     for m in _ANY_AMT_RE.finditer(blob):
         ctx = blob[max(0, m.start() - 48):m.start()].lower()
         if any(k in ctx for k in ("credit limit", "available", "avl limit", "avl.",
@@ -65,7 +77,10 @@ IN_KW  = ["credited", "deposited", "received", "credit of", "has been credited",
 OUT_KW = ["debited", "spent", "withdrawn", "paid", "purchase", "debit of",
           "sent", "transferred", "deducted", "has been debited",
           "used for a transaction", "has been used for", "used for a txn",
-          "charged", "spent on", "transaction of inr", "transaction of rs"]
+          "charged", "spent on", "transaction of inr", "transaction of rs",
+          # order-receipt style (Zomato / food & shopping confirmations)
+          "total paid", "amount paid", "payment summary", "thanks for ordering",
+          "thank you for ordering", "order placed"]
 
 BANKS = {
     "canara": "Canara Bank", "pnb": "PNB", "punjab national": "PNB",
@@ -79,6 +94,9 @@ MERCHANT_PATTERNS = [
     r'UPI/[A-Z]{2}/\d+/([^/]+)/',
     r'\bInfo[:\-]\s*([A-Za-z0-9&._/\- ]{2,40}?)' + _STOP,      # narration field (ICICI etc.)
     r'(?:card|xx\d{3,4})\s*[:\-]\s*([A-Za-z0-9&.\- ]{2,40}?)\s+on\b',   # Canara: "...CreditCard XX1009: ZOMATOLIMITED on 07-JUL"
+    # order receipts: "Your Zomato order from Burger Farm" / "your meal from X"
+    r"(?:order|ordering|meal)\s+from\s+([A-Za-z0-9&.'’_\- ]{2,40}?)"
+    r"(?:\s+(?:was|is|has|will|on|in|by|via)\b|\s*[\.,;!\r\n]|\s*$)",
     r'\bfor\s+([A-Za-z0-9&._\- ]{2,40}?)\s+on\s+\d',           # Canara: "...for SWIGGY on 04-MAY-26"
     r'\btowards\s+([A-Za-z0-9&._\- ]{2,40}?)' + _STOP,
     r'\bat\s+([A-Za-z0-9&._\- ]{2,40}?)' + _STOP,

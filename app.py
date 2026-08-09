@@ -1291,6 +1291,10 @@ class SourceDialog(QDialog):
                      ("Subject contains", self.e_subj), ("Match", self.e_match),
                      ("Primary", self.e_primary)]:
             v.addLayout(_form_row(t, w))
+        self.e_receipt = QCheckBox("Receipt source — auto-ignore amounts already tracked "
+                                   "by another source (e.g. the card alert for the same order)")
+        self.e_receipt.setChecked(bool(src.get("receipt")))
+        v.addWidget(self.e_receipt)
         v.addSpacing(6)
         rb = QHBoxLayout()
         rb.addWidget(btn("Save changes", self._save))
@@ -1311,6 +1315,7 @@ class SourceDialog(QDialog):
                 s["subject_contains"] = self.e_subj.text().strip()
                 s["match"] = self.e_match.currentText()
                 s["primary"] = self.e_primary.currentText()
+                s["receipt"] = self.e_receipt.isChecked()
                 break
         config.save(cfg)
         mailreader.apply_custom(cfg)
@@ -2428,7 +2433,8 @@ class SettingsPage(Page):
             dot = QLabel("●"); dot.setStyleSheet(f"color:{T.source_color(s.get('name'))}; background:transparent;")
             r.addWidget(dot)
             r.addWidget(lbl(s.get("name", "?"), bold=True, size=10))
-            r.addWidget(lbl(f"from~'{s.get('from_contains','')}'  subj~'{s.get('subject_contains','')}'  [{m}, primary={p}]",
+            r.addWidget(lbl(f"from~'{s.get('from_contains','')}'  subj~'{s.get('subject_contains','')}'  [{m}, primary={p}]"
+                            + ("  [receipt]" if s.get("receipt") else ""),
                             color=T.MUTED, size=8)); r.addStretch(1)
             r.addWidget(btn("Edit", lambda _=0, ss=dict(s): self._src_edit(ss), "ghost"))
             r.addWidget(btn("Remove", lambda _=0, n=s["name"]: self._src_remove(n), "ghost"))
@@ -2440,6 +2446,9 @@ class SettingsPage(Page):
         for t, w in [("Name", self.s_name), ("From contains", self.s_from),
                      ("Subject contains", self.s_subj), ("Match", self.s_match), ("Primary", self.s_primary)]:
             v.addLayout(_form_row(t, w))
+        self.s_receipt = QCheckBox("Receipt source — auto-ignore amounts already tracked by "
+                                   "another source (e.g. the card alert for the same order)")
+        v.addWidget(self.s_receipt)
         v.addSpacing(4)
         v.addWidget(btn("Add source", self._src_add), alignment=Qt.AlignLeft)
         self.v.addWidget(c)
@@ -2451,7 +2460,8 @@ class SettingsPage(Page):
             return
         cfg = config.load()
         cfg.setdefault("sources", []).append({"name": name, "from_contains": fc, "subject_contains": sc,
-                                              "match": self.s_match.currentText(), "primary": self.s_primary.currentText()})
+                                              "match": self.s_match.currentText(), "primary": self.s_primary.currentText(),
+                                              "receipt": self.s_receipt.isChecked()})
         config.save(cfg); self.on_show()
 
     def _src_edit(self, src):

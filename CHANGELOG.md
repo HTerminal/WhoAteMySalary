@@ -5,6 +5,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-08-09
+### Added
+- **Order-receipt parsing** (Zomato-style confirmations): the parser now
+  understands receipt wording — "Total paid - ₹281.13", "Grand Total",
+  "Payment Summary", "Thanks for ordering" — preferring the receipt's final
+  total over the first item price, and extracts the restaurant/shop from
+  "order from X" / "meal from X" phrasing. Bank-alert parsing is unchanged
+  (regression-checked against 2,167 real alerts).
+- **Receipt sources + cross-source duplicate guard**: a tracked source can be
+  marked "Receipt source" (Settings → Tracked sources). Transactions imported
+  from such a source are auto-ignored (visible in the log, excluded from
+  totals, re-taggable) when another source already recorded the same payment —
+  same direction and amount within a day — so an order receipt doesn't
+  double-count the card alert for the very same payment. Scan and live-check
+  logs report these as "duplicate — auto-ignored".
+
 ## [1.4.0] - 2026-08-09
 ### Added
 - **"Category habits" panel on the Overview** (replaces the month-by-month

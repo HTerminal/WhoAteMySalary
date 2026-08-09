@@ -13,6 +13,14 @@ _NET_ERRORS = (socket.gaierror, socket.timeout, TimeoutError, ConnectionError,
                OSError, imaplib.IMAP4.error, imaplib.IMAP4.abort)
 
 
+def _receipt_src(cfg, name):
+    """Is this source flagged as a receipt source (order confirmations whose
+    payment usually ALSO arrives as a bank/card alert)? Those get the
+    cross-source duplicate guard on import."""
+    return any(s.get("receipt") and s.get("name") == name
+               for s in cfg.get("sources", []))
+
+
 class PollerWorker(QThread):
     pollStart = pyqtSignal()
     pollDone = pyqtSignal(dict)          # {found, online}
@@ -94,8 +102,14 @@ class PollerWorker(QThread):
                     remembered = db.recall_merchant(db.merch_key(t["merchant"]))
                     t["guessed_category"] = remembered or guess_category(
                         f"{t['merchant']} {t['subject']}", t["direction"])
-                    rid = db.add_txn(t)          # status defaults to 'pending' -> Review
-                    if rid:
+                    rid = db.add_txn(t, dedupe=_receipt_src(cfg, t.get("source", "")))
+                    if rid:                      # status defaults to 'pending' -> Review
+                        row = db.get(rid)
+                        if row and row["status"] == "ignored":
+                            # another source already tracks this payment
+                            self._log(f"      · Rs {t['amount']:,.0f}  {(t['merchant'] or '')[:26]}"
+                                      f"  — duplicate of an already-tracked txn, auto-ignored")
+                            continue
                         added += 1
                         total_new += 1
                         self._log(f"      + Rs {t['amount']:,.0f}  {(t['merchant'] or '')[:26]}  "
@@ -162,7 +176,8 @@ class ScanWorker(QThread):
     def run(self):
         cfg = config.load()
         accts = cfg.get("accounts", [])
-        st = {"scanned": 0, "added": 0, "skipped": 0, "from_cache": 0, "downloaded": 0}
+        st = {"scanned": 0, "added": 0, "skipped": 0, "from_cache": 0, "downloaded": 0,
+              "dups": 0}
         mode = "FORCE re-fetch (ignore history)" if self.force else "new emails only (skip already-fetched)"
         self.logLine.emit(f"Scan {self.sd} -> {self.ed} across {len(accts)} mailbox(es) — {mode}.")
         if not accts:
@@ -195,7 +210,15 @@ class ScanWorker(QThread):
                 for p in (plist or []):        # one email can yield several txns
                     p["guessed_category"] = guess_category(
                         f"{p['merchant']} {p['subject']}", p["direction"])
-                    if db.add_txn(p, status="tagged"):
+                    rid = db.add_txn(p, status="tagged",
+                                     dedupe=_receipt_src(cfg, p.get("source", "")))
+                    if rid:
+                        row = db.get(rid)
+                        if row and row["status"] == "ignored":
+                            st["dups"] += 1
+                            self.logLine.emit(f"   . Rs {p['amount']:,.0f}  {p['merchant'][:26]}"
+                                              f"  — duplicate (already tracked), auto-ignored")
+                            continue
                         st["added"] += 1
                         sign = "+" if p["direction"] == "IN" else "-"
                         self.logLine.emit(f"   {sign} Rs {p['amount']:,.0f}  "
@@ -220,7 +243,8 @@ class ScanWorker(QThread):
         self.finishedScan.emit({**st, "cache": _cache_count()})
         self.logLine.emit(f"Done. Processed {st['scanned']} emails "
                           f"({st['from_cache']} from cache, {st['downloaded']} downloaded, "
-                          f"{st['skipped']} skipped) — added {st['added']} transactions.")
+                          f"{st['skipped']} skipped) — added {st['added']} transactions"
+                          + (f" (+{st['dups']} duplicates auto-ignored)." if st["dups"] else "."))
 
 
 class OAuthWorker(QThread):

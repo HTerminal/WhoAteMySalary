@@ -78,13 +78,30 @@ def set_meta(k, v):
     c.commit()
 
 
-def add_txn(t, status="pending", seq=None):
+def add_txn(t, status="pending", seq=None, dedupe=False):
     """Insert a detected txn. Returns row id, or None if duplicate.
-    seq distinguishes multiple transactions parsed from the same email."""
+    seq distinguishes multiple transactions parsed from the same email.
+
+    dedupe=True (used for 'receipt' sources, e.g. Zomato order confirmations):
+    when ANOTHER source already recorded the same payment — same direction and
+    amount within a day, like the card alert for that very order — the new row
+    is stored with status 'ignored' so totals don't count the money twice. It
+    stays visible in the Transactions log and can be re-tagged if it really was
+    a separate payment."""
     tdate, month = parse_dates(t.get("email_date", ""))
     if seq is None:
         seq = t.get("seq", 0)
     c = conn()
+    note = ""
+    if dedupe and status != "ignored" and tdate:
+        dup = c.execute(
+            "SELECT id, source FROM txns WHERE direction=? AND ABS(amount-?)<0.005 "
+            "AND source<>? AND status!='ignored' "
+            "AND tdate BETWEEN date(?,'-1 day') AND date(?,'+1 day') LIMIT 1",
+            (t["direction"], t["amount"], t.get("source", ""), tdate, tdate)).fetchone()
+        if dup:
+            status = "ignored"
+            note = f"auto-ignored: same amount already tracked by '{dup['source']}'"
     try:
         cur = c.execute("""INSERT INTO txns
             (account,uid,seq,bank,amount,direction,merchant,subject,from_addr,
@@ -94,7 +111,7 @@ def add_txn(t, status="pending", seq=None):
             (t["account"], t["uid"], int(seq), t.get("bank",""), t["amount"], t["direction"],
              t.get("merchant",""), t.get("subject",""), t.get("from_addr",""),
              t.get("email_date",""), tdate, month, time.time(),
-             t.get("guessed_category",""), t.get("guessed_category",""), "",
+             t.get("guessed_category",""), t.get("guessed_category",""), note,
              t.get("source",""), t.get("card",""), t.get("ref",""), status))
         c.commit()
         return cur.lastrowid
